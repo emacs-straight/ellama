@@ -6,7 +6,7 @@
 ;; URL: http://github.com/s-kostyaev/ellama
 ;; Keywords: help local tools
 ;; Package-Requires: ((emacs "28.1") (llm "0.6.0") (spinner "1.7.4"))
-;; Version: 0.2.0
+;; Version: 0.4.0
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Created: 8th Oct 2023
 
@@ -77,6 +77,11 @@
   :group 'tools
   :type '(sexp :validate 'cl-struct-p))
 
+(defcustom ellama-providers nil
+  "LLM provider list for fast switching."
+  :group 'tools
+  :type '(alist :key-type string))
+
 (defcustom ellama-spinner-type 'progress-bar
   "Spinner type for ellama."
   :group 'tools
@@ -84,6 +89,16 @@
 		    (lambda (type)
 		      `(const ,(car type)))
 		    spinner-types)))
+
+(defcustom ellama-keymap-prefix "C-c e"
+  "Key sequence for Ellama Commands."
+  :type 'string
+  :group 'tools)
+
+(defcustom ellama-ollama-binary (executable-find "ollama")
+  "Path to ollama binary."
+  :type 'string
+  :group 'tools)
 
 (defvar-local ellama--chat-prompt nil)
 
@@ -96,6 +111,59 @@
 (defconst ellama--code-suffix
   (rx (minimal-match
        (literal "```") (zero-or-more anything))))
+
+(defun ellama-setup-keymap ()
+  "Set up the Ellama keymap and bindings."
+  (interactive)
+  (defvar ellama-keymap (make-sparse-keymap)
+    "Keymap for Ellama Commands")
+
+  (define-key global-map (kbd ellama-keymap-prefix) ellama-keymap)
+
+  (let ((key-commands
+         '(
+           ;; code
+	   ("c c" ellama-code-complete "Code complete")
+	   ("c a" ellama-code-add "Code add")
+	   ("c e" ellama-code-edit "Code edit")
+	   ("c i" ellama-code-improve "Code improve")
+	   ("c r" ellama-code-review "Code review")
+	   ;; summarize
+	   ("s s" ellama-summarize "Summarize")
+	   ("s w" ellama-summarize-webpage "Summarize webpage")
+	   ;; improve
+	   ("i w" ellama-improve-wording "Improve wording")
+	   ("i g" ellama-improve-grammar "Improve grammar and spelling")
+	   ("i c" ellama-improve-conciseness "Improve conciseness")
+	   ;; make
+	   ("m l" ellama-make-list "Make list")
+	   ("m t" ellama-make-table "Make table")
+	   ("m f" ellama-make-format "Make format")
+	   ;; ask
+	   ("a a" ellama-ask-about "Ask about")
+	   ("a i" ellama-ask-interactive "Ask interactively")
+	   ("a l" ellama-ask-line "Ask current line")
+	   ("a s" ellama-ask-selection "Ask selection")
+	   ;; text
+	   ("t t" ellama-translate "Text translate")
+	   ("t c" ellama-complete "Text complete")
+	   ;; define
+	   ("d w" ellama-define-word "Define word")
+	   ;; provider
+	   ("p s" ellama-provider-select "Provider select"))))
+    (dolist (key-command key-commands)
+      (define-key ellama-keymap (kbd (car key-command)) (cadr key-command)))))
+
+(defcustom ellama-enable-keymap t
+  "Enable or disable Ellama keymap."
+  :type 'boolean
+  :group 'ellama
+  :set (lambda (symbol value)
+         (set symbol value)
+         (if value
+             (ellama-setup-keymap)
+           ;; If ellama-enable-keymap is nil, remove the key bindings
+           (define-key global-map (kbd ellama-keymap-prefix) nil))))
 
 (defun ellama-stream (prompt &rest args)
   "Query ellama for PROMPT.
@@ -235,6 +303,33 @@ In BUFFER at POINT will be inserted result between PREFIX and SUFFIX."
 
 ;;;###autoload
 (defalias 'ellama-ask 'ellama-chat)
+
+;;;###autoload
+(defalias 'ellama-code-complete 'ellama-complete-code)
+
+;;;###autoload
+(defalias 'ellama-code-add 'ellama-add-code)
+
+;;;###autoload
+(defalias 'ellama-code-edit 'ellama-change-code)
+
+;;###autoload
+(defalias 'ellama-code-improve 'ellama-enhance-code)
+
+;;;###autoload
+(defalias 'ellama-improve-wording 'ellama-enhance-wording)
+
+;;;###autoload
+(defalias 'ellama-improve-grammar 'ellama-enhance-grammar-spelling)
+
+;;;###autoload
+(defalias 'ellama-improve-conciseness 'ellama-make-concise)
+
+;;;###autoload
+(defalias 'ellama-make-format 'ellama-render)
+
+;;;###autoload
+(defalias 'ellama-ask-interactive 'ellama-ask)
 
 ;;;###autoload
 (defun ellama-ask-about ()
@@ -484,6 +579,33 @@ buffer."
       (beginning-of-line)
       (kill-region (point) (point-max))
       (ellama-summarize))))
+
+(defun ellama-get-ollama-local-model ()
+  "Return llm provider for interactively selected ollama model."
+  (interactive)
+  (let ((model-name
+	 (completing-read "Select ollama model: "
+			  (mapcar (lambda (s)
+				    (car (split-string s)))
+				  (seq-drop
+				   (process-lines ellama-ollama-binary "ls") 1)))))
+    (make-llm-ollama
+     :chat-model model-name :embedding-model model-name)))
+
+;;;###autoload
+(defun ellama-provider-select ()
+  "Select ellama provider."
+  (interactive)
+  (let* ((providers (if (and ellama-ollama-binary
+			     (file-exists-p ellama-ollama-binary))
+			(push '("ollama model" . (ellama-get-ollama-local-model))
+			      ellama-providers)
+		      ellama-providers))
+	 (variants (mapcar #'car providers)))
+    (setq ellama-provider
+	  (eval (alist-get
+		 (completing-read "Select model: " variants)
+		 providers nil nil #'string=)))))
 
 (provide 'ellama)
 ;;; ellama.el ends here.
