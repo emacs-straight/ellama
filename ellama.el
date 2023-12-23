@@ -6,7 +6,7 @@
 ;; URL: http://github.com/s-kostyaev/ellama
 ;; Keywords: help local tools
 ;; Package-Requires: ((emacs "28.1") (llm "0.6.0") (spinner "1.7.4"))
-;; Version: 0.4.3
+;; Version: 0.4.6
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Created: 8th Oct 2023
 
@@ -117,6 +117,11 @@
   (rx (minimal-match
        (literal "```") (zero-or-more anything))))
 
+(defun ellama--code-filter (text)
+  "Filter code prefix/suffix from TEXT."
+  ;; Trim left first as `string-trim' trims from the right and ends up deleting all the code.
+  (string-trim-right (string-trim-left text ellama--code-prefix) ellama--code-suffix))
+
 (defun ellama-setup-keymap ()
   "Set up the Ellama keymap and bindings."
   (interactive)
@@ -126,7 +131,7 @@
   (define-key global-map (kbd ellama-keymap-prefix) ellama-keymap)
 
   (let ((key-commands
-         '(;; code
+	 '(;; code
 	   ("c c" ellama-code-complete "Code complete")
 	   ("c a" ellama-code-add "Code add")
 	   ("c e" ellama-code-edit "Code edit")
@@ -163,11 +168,11 @@
   :type 'boolean
   :group 'tools
   :set (lambda (symbol value)
-         (set symbol value)
-         (if value
-             (ellama-setup-keymap)
-           ;; If ellama-enable-keymap is nil, remove the key bindings
-           (define-key global-map (kbd ellama-keymap-prefix) nil))))
+	 (set symbol value)
+	 (if value
+	     (ellama-setup-keymap)
+	   ;; If ellama-enable-keymap is nil, remove the key bindings
+	   (define-key global-map (kbd ellama-keymap-prefix) nil))))
 
 (defun ellama-stream (prompt &rest args)
   "Query ellama for PROMPT.
@@ -176,11 +181,31 @@ ARGS contains keys for fine control.
 :buffer BUFFER -- BUFFER is the buffer (or `buffer-name') to insert ellama reply
 in.  Default value is (current-buffer).
 
-:point POINT -- POINT is the point in buffer to insert ellama reaply at."
+:point POINT -- POINT is the point in buffer to insert ellama reply at.
+
+:filter FILTER -- FILTER is a function that's applied to (partial) response
+strings before they're inserted into the BUFFER.
+
+:session SESSION -- if session is non-nil, the PROMPT will be appended to the
+current (BUFFER-local) conversation.
+
+:on-error ON-ERROR -- ON-ERROR a function that's called with an error message on
+failure (with BUFFER current).
+
+:on-done ON-DONE -- ON-DONE a function that's called with the full response text
+when the request completes (with BUFFER current)."
   (let* ((buffer (or (plist-get args :buffer) (current-buffer)))
 	 (point (or (plist-get args :point)
-		    (with-current-buffer buffer (point)))))
+		    (with-current-buffer buffer (point))))
+	 (filter (or (plist-get args :filter) #'identity))
+	 (session (plist-get args :session))
+	 (errcb (or (plist-get args :on-error) (lambda (msg) (error "Error calling the LLM: %s" msg))))
+	 (donecb (or (plist-get args :on-done) #'ignore)))
     (with-current-buffer buffer
+      (if (and session ellama--chat-prompt)
+	  (llm-chat-prompt-append-response
+	   ellama--chat-prompt prompt)
+	(setq ellama--chat-prompt (llm-make-simple-chat-prompt prompt)))
       (unwind-protect
 	  (save-excursion
 	    (let* ((start (make-marker))
@@ -194,7 +219,7 @@ in.  Default value is (current-buffer).
 			  (save-excursion
 			    (goto-char start)
 			    (delete-region start end)
-			    (insert text)
+			    (insert (funcall filter text))
 			    (fill-region start (point)))
 			  (goto-char pt))
 			(when ellama-auto-scroll
@@ -208,75 +233,26 @@ in.  Default value is (current-buffer).
 			  (select-window window))))))
 	      (setq ellama--change-group (prepare-change-group))
 	      (activate-change-group ellama--change-group)
-              (set-marker start point)
-              (set-marker end point)
-              (set-marker-insertion-type start nil)
-              (set-marker-insertion-type end t)
+	      (set-marker start point)
+	      (set-marker end point)
+	      (set-marker-insertion-type start nil)
+	      (set-marker-insertion-type end t)
 	      (spinner-start ellama-spinner-type)
 	      (llm-chat-streaming ellama-provider
-				  (llm-make-simple-chat-prompt prompt)
+				  ellama--chat-prompt
 				  insert-text
 				  (lambda (text)
 				    (funcall insert-text text)
 				    (with-current-buffer buffer
 				      (undo-amalgamate-change-group ellama--change-group)
 				      (accept-change-group ellama--change-group)
-				      (spinner-stop)))
+				      (spinner-stop)
+				      (funcall donecb text)))
 				  (lambda (_ msg)
-				    (error "Error calling the LLM: %s" msg)
-				    (cancel-change-group ellama--change-group)))))))))
-
-(defun ellama-stream-filter (prompt prefix suffix buffer point)
-  "Query ellama for PROMPT with filtering.
-In BUFFER at POINT will be inserted result between PREFIX and SUFFIX."
-  (with-current-buffer buffer
-    (unwind-protect
-	(save-excursion
-	  (let* ((start (make-marker))
-		 (end (make-marker))
-		 (window (selected-window))
-		 (insert-text
-		  (lambda (text)
-		    ;; Erase and insert the new text between the marker cons.
-		    (with-current-buffer (marker-buffer start)
-		      (let ((pt (point)))
-			(save-excursion
-			  (goto-char start)
-			  (delete-region start end)
-			  ;; remove prefix and suffix parts
-			  (insert (string-trim-right
-				   (string-trim-left text prefix)
-				   suffix))
-			  (fill-region start (point)))
-			(goto-char pt))
-		      (when ellama-auto-scroll
-			(select-window (get-window-with-predicate
-					(lambda (_)
-					  (eq (current-buffer)
-					      (get-buffer ellama-buffer))))
-				       t)
-			(goto-char (point-max))
-			(recenter -1)
-			(select-window window))))))
-	    (setq ellama--change-group (prepare-change-group))
-	    (activate-change-group ellama--change-group)
-            (set-marker start point)
-            (set-marker end point)
-            (set-marker-insertion-type start nil)
-            (set-marker-insertion-type end t)
-	    (spinner-start ellama-spinner-type)
-	    (llm-chat-streaming ellama-provider
-				(llm-make-simple-chat-prompt prompt)
-				insert-text
-				(lambda (text)
-				  (funcall insert-text text)
-				  (with-current-buffer buffer
-				    (undo-amalgamate-change-group ellama--change-group)
-				    (accept-change-group ellama--change-group)
-				    (spinner-stop)))
-				(lambda (_ msg)
-				  (cancel-change-group ellama--change-group)
-				  (error "Error calling the LLM: %s" msg))))))))
+				    (with-current-buffer buffer
+				      (cancel-change-group ellama--change-group)
+				      (spinner-stop)
+				      (funcall errcb msg))))))))))
 
 ;;;###autoload
 (defun ellama-chat (prompt)
@@ -288,60 +264,15 @@ In BUFFER at POINT will be inserted result between PREFIX and SUFFIX."
       (funcall ellama-buffer-mode)))
   (display-buffer ellama-buffer)
   (with-current-buffer ellama-buffer
-    (if ellama--chat-prompt
-	(llm-chat-prompt-append-response
-	 ellama--chat-prompt prompt)
-      (setq ellama--chat-prompt (llm-make-simple-chat-prompt prompt)))
     (save-excursion
       (goto-char (point-max))
       (insert "## " ellama-user-nick ":\n" prompt "\n\n"
 	      "## " ellama-assistant-nick ":\n")
-      (let* ((start (make-marker))
-	     (end (make-marker))
-	     (point (point-max))
-	     (window (selected-window))
-	     (insert-text
-	      (lambda (text)
-		;; Erase and insert the new text between the marker cons.
-		(with-current-buffer (marker-buffer start)
-		  (let ((pt (point)))
-		    (save-excursion
-		      (goto-char start)
-		      (delete-region start end)
-		      (insert text)
-		      (fill-region start (point)))
-		    (goto-char pt))
-		  (when ellama-auto-scroll
-		    (select-window (get-window-with-predicate
-				    (lambda (_)
-				      (eq (current-buffer)
-					  (get-buffer ellama-buffer))))
-				   t)
-		    (goto-char (point-max))
-		    (recenter -1)
-		    (select-window window))))))
-	(setq ellama--change-group (prepare-change-group))
-	(activate-change-group ellama--change-group)
-	(set-marker start point)
-	(set-marker end point)
-	(set-marker-insertion-type start nil)
-	(set-marker-insertion-type end t)
-	(spinner-start ellama-spinner-type)
-	(llm-chat-streaming ellama-provider
-			    ellama--chat-prompt
-			    insert-text
-			    (lambda (text)
-			      (funcall insert-text text)
-			      (with-current-buffer ellama-buffer
-				(save-excursion
-				  (goto-char (point-max))
-				  (insert "\n\n"))
-				(undo-amalgamate-change-group ellama--change-group)
-				(accept-change-group ellama--change-group)
-				(spinner-stop)))
-			    (lambda (_ msg)
-			      (cancel-change-group ellama--change-group)
-			      (error "Error calling the LLM: %s" msg)))))))
+      (ellama-stream prompt
+		     :session t
+		     :on-done (lambda (_) (save-excursion
+				      (goto-char (point-max))
+				      (insert "\n\n")))))))
 
 ;;;###autoload
 (defalias 'ellama-ask 'ellama-chat)
@@ -502,14 +433,12 @@ In BUFFER at POINT will be inserted result between PREFIX and SUFFIX."
 		(point-max)))
 	 (text (buffer-substring-no-properties beg end)))
     (kill-region beg end)
-    (ellama-stream-filter
+    (ellama-stream
      (format
       "Regarding the following code, %s, only ouput the result code in format ```language\n...\n```:\n```\n%s\n```"
       change text)
-     ellama--code-prefix
-     ellama--code-suffix
-     (current-buffer)
-     beg)))
+     :filter #'ellama--code-filter
+     :point beg)))
 
 ;;;###autoload
 (defun ellama-enhance-code ()
@@ -523,14 +452,12 @@ In BUFFER at POINT will be inserted result between PREFIX and SUFFIX."
 		(point-max)))
 	 (text (buffer-substring-no-properties beg end)))
     (kill-region beg end)
-    (ellama-stream-filter
+    (ellama-stream
      (format
       "Enhance the following code, only ouput the result code in format ```language\n...\n```:\n```\n%s\n```"
       text)
-     ellama--code-prefix
-     ellama--code-suffix
-     (current-buffer)
-     beg)))
+     :filter #'ellama--code-filter
+     :point beg)))
 
 ;;;###autoload
 (defun ellama-complete-code ()
@@ -543,14 +470,12 @@ In BUFFER at POINT will be inserted result between PREFIX and SUFFIX."
 		  (region-end)
 		(point)))
 	 (text (buffer-substring-no-properties beg end)))
-    (ellama-stream-filter
+    (ellama-stream
      (format
       "Continue the following code, only write new code in format ```language\n...\n```:\n```\n%s\n```"
       text)
-     ellama--code-prefix
-     ellama--code-suffix
-     (current-buffer)
-     end)))
+     :filter #'ellama--code-filter
+     :point end)))
 
 ;;;###autoload
 (defun ellama-add-code (description)
@@ -565,20 +490,17 @@ buffer."
 		  (region-end)
 		(point-max)))
 	 (text (buffer-substring-no-properties beg end)))
-    (ellama-stream-filter
+    (ellama-stream
      (format
       "Context: \n```\n%s\n```\nBased on this context, %s, only ouput the result in format ```\n...\n```"
       text description)
-     ellama--code-prefix
-     ellama--code-suffix
-     (current-buffer)
-     (point))))
+     :filter #'ellama--code-filter)))
 
 
 ;;;###autoload
 (defun ellama-render (needed-format)
   "Render selected text or text in current buffer as NEEDED-FORMAT."
-  (interactive)
+  (interactive "sSpecify required format: ")
   (let* ((beg (if (region-active-p)
 		  (region-beginning)
 		(point-min)))
