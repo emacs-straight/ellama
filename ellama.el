@@ -6,7 +6,7 @@
 ;; URL: http://github.com/s-kostyaev/ellama
 ;; Keywords: help local tools
 ;; Package-Requires: ((emacs "28.1") (llm "0.6.0") (spinner "1.7.4"))
-;; Version: 0.4.6
+;; Version: 0.4.7
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Created: 8th Oct 2023
 
@@ -206,53 +206,47 @@ when the request completes (with BUFFER current)."
 	  (llm-chat-prompt-append-response
 	   ellama--chat-prompt prompt)
 	(setq ellama--chat-prompt (llm-make-simple-chat-prompt prompt)))
-      (unwind-protect
-	  (save-excursion
-	    (let* ((start (make-marker))
-		   (end (make-marker))
-		   (window (selected-window))
-		   (insert-text
-		    (lambda (text)
-		      ;; Erase and insert the new text between the marker cons.
-		      (with-current-buffer (marker-buffer start)
-			(let ((pt (point)))
-			  (save-excursion
-			    (goto-char start)
-			    (delete-region start end)
-			    (insert (funcall filter text))
-			    (fill-region start (point)))
-			  (goto-char pt))
-			(when ellama-auto-scroll
-			  (select-window (get-window-with-predicate
-					  (lambda (_)
-					    (eq (current-buffer)
-						(get-buffer buffer))))
-					 t)
-			  (goto-char (point-max))
-			  (recenter -1)
-			  (select-window window))))))
-	      (setq ellama--change-group (prepare-change-group))
-	      (activate-change-group ellama--change-group)
-	      (set-marker start point)
-	      (set-marker end point)
-	      (set-marker-insertion-type start nil)
-	      (set-marker-insertion-type end t)
-	      (spinner-start ellama-spinner-type)
-	      (llm-chat-streaming ellama-provider
-				  ellama--chat-prompt
-				  insert-text
-				  (lambda (text)
-				    (funcall insert-text text)
-				    (with-current-buffer buffer
-				      (undo-amalgamate-change-group ellama--change-group)
-				      (accept-change-group ellama--change-group)
-				      (spinner-stop)
-				      (funcall donecb text)))
-				  (lambda (_ msg)
-				    (with-current-buffer buffer
-				      (cancel-change-group ellama--change-group)
-				      (spinner-stop)
-				      (funcall errcb msg))))))))))
+      (let* ((start (make-marker))
+	     (end (make-marker))
+	     (insert-text
+	      (lambda (text)
+		;; Erase and insert the new text between the marker cons.
+		(with-current-buffer buffer
+		  ;; Manually save/restore point as save-excursion doesn't restore the point into
+		  ;; the middle of replaced text.
+		  (let ((pt (point)))
+		    (goto-char start)
+		    (delete-region start end)
+		    (insert (funcall filter text))
+		    (fill-region start (point))
+		    (goto-char pt))
+		  (when-let ((ellama-auto-scroll)
+			     (window (get-buffer-window buffer)))
+		    (with-selected-window window
+		      (goto-char (point-max))
+		      (recenter -1)))))))
+	(setq ellama--change-group (prepare-change-group))
+	(activate-change-group ellama--change-group)
+	(set-marker start point)
+	(set-marker end point)
+	(set-marker-insertion-type start nil)
+	(set-marker-insertion-type end t)
+	(spinner-start ellama-spinner-type)
+	(llm-chat-streaming ellama-provider
+			    ellama--chat-prompt
+			    insert-text
+			    (lambda (text)
+			      (funcall insert-text text)
+			      (with-current-buffer buffer
+				(undo-amalgamate-change-group ellama--change-group)
+				(accept-change-group ellama--change-group)
+				(spinner-stop)
+				(funcall donecb text)))
+			    (lambda (_ msg)
+			      (with-current-buffer buffer
+				(cancel-change-group ellama--change-group)
+				(spinner-stop)
+				(funcall errcb msg))))))))
 
 ;;;###autoload
 (defun ellama-chat (prompt)
