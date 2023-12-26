@@ -6,7 +6,7 @@
 ;; URL: http://github.com/s-kostyaev/ellama
 ;; Keywords: help local tools
 ;; Package-Requires: ((emacs "28.1") (llm "0.6.0") (spinner "1.7.4"))
-;; Version: 0.4.9
+;; Version: 0.4.11
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Created: 8th Oct 2023
 
@@ -40,31 +40,35 @@
 (require 'spinner)
 (eval-when-compile (require 'rx))
 
+(defgroup ellama nil
+  "Tool for interacting with LLMs."
+  :group 'tools)
+
 (defcustom ellama-buffer "*ellama*"
   "Default ellama buffer."
-  :group 'tools
+  :group 'ellama
   :type 'string)
 
 (defcustom ellama-user-nick "User"
   "User nick in logs."
-  :group 'tools
+  :group 'ellama
   :type 'string)
 
 (defcustom ellama-assistant-nick "Ellama"
   "Assistant nick in logs."
-  :group 'tools
+  :group 'ellama
   :type 'string)
 
 (defcustom ellama-buffer-mode (if (fboundp 'markdown-mode)
 				  'markdown-mode
 				'text-mode)
   "Major mode for ellama logs."
-  :group 'tools
+  :group 'ellama
   :type 'function)
 
 (defcustom ellama-language "English"
   "Language for ellama translation."
-  :group 'tools
+  :group 'ellama
   :type 'string)
 
 (defcustom ellama-provider
@@ -74,36 +78,82 @@
     (make-llm-ollama
      :chat-model "zephyr" :embedding-model "zephyr"))
   "Backend LLM provider."
-  :group 'tools
+  :group 'ellama
   :type '(sexp :validate 'cl-struct-p))
 
 (defcustom ellama-providers nil
   "LLM provider list for fast switching."
-  :group 'tools
+  :group 'ellama
   :type '(alist :key-type string))
 
 (defcustom ellama-spinner-type 'progress-bar
   "Spinner type for ellama."
-  :group 'tools
+  :group 'ellama
   :type `(choice ,@(mapcar
 		    (lambda (type)
 		      `(const ,(car type)))
 		    spinner-types)))
 
+(defun ellama-setup-keymap ()
+  "Set up the Ellama keymap and bindings."
+  (interactive)
+  (when (boundp 'ellama-keymap-prefix)
+    (defvar ellama-keymap (make-sparse-keymap)
+      "Keymap for Ellama Commands")
+
+    (define-key global-map (kbd ellama-keymap-prefix) ellama-keymap)
+
+    (let ((key-commands
+	   '(;; code
+	     ("c c" ellama-code-complete "Code complete")
+	     ("c a" ellama-code-add "Code add")
+	     ("c e" ellama-code-edit "Code edit")
+	     ("c i" ellama-code-improve "Code improve")
+	     ("c r" ellama-code-review "Code review")
+	     ;; summarize
+	     ("s s" ellama-summarize "Summarize")
+	     ("s w" ellama-summarize-webpage "Summarize webpage")
+	     ;; improve
+	     ("i w" ellama-improve-wording "Improve wording")
+	     ("i g" ellama-improve-grammar "Improve grammar and spelling")
+	     ("i c" ellama-improve-conciseness "Improve conciseness")
+	     ;; make
+	     ("m l" ellama-make-list "Make list")
+	     ("m t" ellama-make-table "Make table")
+	     ("m f" ellama-make-format "Make format")
+	     ;; ask
+	     ("a a" ellama-ask-about "Ask about")
+	     ("a i" ellama-ask-interactive "Ask interactively")
+	     ("a l" ellama-ask-line "Ask current line")
+	     ("a s" ellama-ask-selection "Ask selection")
+	     ;; text
+	     ("t t" ellama-translate "Text translate")
+	     ("t c" ellama-complete "Text complete")
+	     ;; define
+	     ("d w" ellama-define-word "Define word")
+	     ;; provider
+	     ("p s" ellama-provider-select "Provider select"))))
+      (dolist (key-command key-commands)
+	(define-key ellama-keymap (kbd (car key-command)) (cadr key-command))))))
+
 (defcustom ellama-keymap-prefix "C-c e"
   "Key sequence for Ellama Commands."
   :type 'string
-  :group 'tools)
+  :set (lambda (symbol value)
+	 (set symbol value)
+	 (when value
+	   (ellama-setup-keymap)))
+  :group 'ellama)
 
 (defcustom ellama-ollama-binary (executable-find "ollama")
   "Path to ollama binary."
   :type 'string
-  :group 'tools)
+  :group 'ellama)
 
 (defcustom ellama-auto-scroll nil
   "If enabled ellama buffer will scroll automatically during generation."
   :type 'boolean
-  :group 'tools)
+  :group 'ellama)
 
 (defvar-local ellama--chat-prompt nil)
 
@@ -122,51 +172,10 @@
   ;; Trim left first as `string-trim' trims from the right and ends up deleting all the code.
   (string-trim-right (string-trim-left text ellama--code-prefix) ellama--code-suffix))
 
-(defun ellama-setup-keymap ()
-  "Set up the Ellama keymap and bindings."
-  (interactive)
-  (defvar ellama-keymap (make-sparse-keymap)
-    "Keymap for Ellama Commands")
-
-  (define-key global-map (kbd ellama-keymap-prefix) ellama-keymap)
-
-  (let ((key-commands
-	 '(;; code
-	   ("c c" ellama-code-complete "Code complete")
-	   ("c a" ellama-code-add "Code add")
-	   ("c e" ellama-code-edit "Code edit")
-	   ("c i" ellama-code-improve "Code improve")
-	   ("c r" ellama-code-review "Code review")
-	   ;; summarize
-	   ("s s" ellama-summarize "Summarize")
-	   ("s w" ellama-summarize-webpage "Summarize webpage")
-	   ;; improve
-	   ("i w" ellama-improve-wording "Improve wording")
-	   ("i g" ellama-improve-grammar "Improve grammar and spelling")
-	   ("i c" ellama-improve-conciseness "Improve conciseness")
-	   ;; make
-	   ("m l" ellama-make-list "Make list")
-	   ("m t" ellama-make-table "Make table")
-	   ("m f" ellama-make-format "Make format")
-	   ;; ask
-	   ("a a" ellama-ask-about "Ask about")
-	   ("a i" ellama-ask-interactive "Ask interactively")
-	   ("a l" ellama-ask-line "Ask current line")
-	   ("a s" ellama-ask-selection "Ask selection")
-	   ;; text
-	   ("t t" ellama-translate "Text translate")
-	   ("t c" ellama-complete "Text complete")
-	   ;; define
-	   ("d w" ellama-define-word "Define word")
-	   ;; provider
-	   ("p s" ellama-provider-select "Provider select"))))
-    (dolist (key-command key-commands)
-      (define-key ellama-keymap (kbd (car key-command)) (cadr key-command)))))
-
 (defcustom ellama-enable-keymap t
   "Enable or disable Ellama keymap."
   :type 'boolean
-  :group 'tools
+  :group 'ellama
   :set (lambda (symbol value)
 	 (set symbol value)
 	 (if value
