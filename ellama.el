@@ -6,7 +6,7 @@
 ;; URL: http://github.com/s-kostyaev/ellama
 ;; Keywords: help local tools
 ;; Package-Requires: ((emacs "28.1") (llm "0.6.0") (spinner "1.7.4"))
-;; Version: 0.4.13
+;; Version: 0.5.6
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Created: 8th Oct 2023
 
@@ -123,7 +123,7 @@
 	     ("m f" ellama-make-format "Make format")
 	     ;; ask
 	     ("a a" ellama-ask-about "Ask about")
-	     ("a i" ellama-ask-interactive "Ask interactively")
+	     ("a i" ellama-chat "Ask interactively")
 	     ("a l" ellama-ask-line "Ask current line")
 	     ("a s" ellama-ask-selection "Ask selection")
 	     ;; text
@@ -164,9 +164,107 @@
           (function :tag "By predicate")
           (repeat :tag "In specific modes" (symbol))))
 
+(defcustom ellama-name-prompt-words-count 5
+  "Count of words in prompt to generate name."
+  :group 'ellama
+  :type 'integer)
+
+(defcustom ellama-ask-about-prompt-template "Text:\n%s\nRegarding this text, %s"
+  "Prompt template for `ellama-ask-about'."
+  :group 'ellama
+  :type 'string)
+
+(defcustom ellama-translate-word-prompt-template "Translate %s to %s"
+  "Promp template for `ellama-translate' with single word."
+  :group 'ellama
+  :type 'string)
+
+(defcustom ellama-translate-region-prompt-template "Translate the following text to %s:\n%s"
+  "Promp template for `ellama-translate' with active region."
+  :group 'ellama
+  :type 'string)
+
+(defcustom ellama-define-word-prompt-template "Define %s"
+  "Prompt template for `ellama-define-word'."
+  :group 'ellama
+  :type 'string)
+
+(defcustom ellama-summarize-prompt-template "Text:\n%s\nSummarize it."
+  "Prompt template for `ellama-summarize'."
+  :group 'ellama
+  :type 'string)
+
+(defcustom ellama-code-review-prompt-template "Review the following code and make concise suggestions:\n```\n%s\n```"
+  "Prompt template for `ellama-code-review'."
+  :group 'ellama
+  :type 'string)
+
+(defcustom ellama-change-prompt-template "Change the following text, %s, just output the final text without additional quotes around it:\n%s"
+  "Prompt template for `ellama-change'."
+  :group 'ellama
+  :type 'string)
+
+(defcustom ellama-improve-grammar-prompt-template "improve grammar and spelling"
+  "Prompt template for `ellama-improve-grammar'."
+  :group 'ellama
+  :type 'string)
+
+(defcustom ellama-improve-wording-prompt-template "use better wording"
+  "Prompt template for `ellama-improve-wording'."
+  :group 'ellama
+  :type 'string)
+
+(defcustom ellama-improve-conciseness-prompt-template "make it as simple and concise as possible"
+  "Prompt template for `ellama-improve-conciseness'."
+  :group 'ellama
+  :type 'string)
+
+(defcustom ellama-code-edit-prompt-template "Regarding the following code, %s, only ouput the result code in format ```language\n...\n```:\n```\n%s\n```"
+  "Prompt template for `ellama-code-edit'."
+  :group 'ellama
+  :type 'string)
+
+(defcustom ellama-code-improve-prompt-template "Enhance the following code, only ouput the result code in format ```language\n...\n```:\n```\n%s\n```"
+  "Prompt template for `ellama-code-improve'."
+  :group 'ellama
+  :type 'string)
+
+(defcustom ellama-code-complete-prompt-template "Continue the following code, only write new code in format ```language\n...\n```:\n```\n%s\n```"
+  "Prompt template for `ellama-code-complete'."
+  :group 'ellama
+  :type 'string)
+
+(defcustom ellama-code-add-prompt-template "Context: \n```\n%s\n```\nBased on this context, %s, only ouput the result in format ```\n...\n```"
+  "Prompt template for `ellama-code-add'."
+  :group 'ellama
+  :type 'string)
+
+(defcustom ellama-make-format-prompt-template "Render the following text as a %s:\n%s"
+  "Prompt template for `ellama-make-format'."
+  :group 'ellama
+  :type 'string)
+
+(defcustom ellama-make-list-prompt-template "markdown list"
+  "Prompt template for `ellama-make-list'."
+  :group 'ellama
+  :type 'string)
+
+(defcustom ellama-make-table-prompt-template "markdown table"
+  "Prompt template for `ellama-make-table'."
+  :group 'ellama
+  :type 'string)
+
+(defcustom ellama-chat-done-callback nil
+  "Callback that will be called on ellama chat response generation done.
+It should be a function with single argument generated text string."
+  :group 'ellama
+  :type 'function)
+
 (defvar-local ellama--chat-prompt nil)
 
 (defvar-local ellama--change-group nil)
+
+(defvar-local ellama--current-request nil)
 
 (defconst ellama--code-prefix
   (rx (minimal-match
@@ -191,6 +289,26 @@
 	     (ellama-setup-keymap)
 	   ;; If ellama-enable-keymap is nil, remove the key bindings
 	   (define-key global-map (kbd ellama-keymap-prefix) nil))))
+
+(defun ellama-generate-name (provider action prompt)
+  "Generate name for ellama ACTION by PROVIDER according to PROMPT."
+  (let ((prompt-words (split-string prompt)))
+    (string-join
+     (flatten-tree
+      (list (split-string (format "%s" action) "-")
+	    (seq-take prompt-words ellama-name-prompt-words-count)
+	    (if (> (length prompt-words) ellama-name-prompt-words-count)
+		"..."
+	      nil)
+	    (format "(%s)" (llm-name provider))))
+     " ")))
+
+(defun ellama--cancel-current-request (&rest _)
+  "Cancel current running request."
+  (when ellama--current-request
+    (llm-cancel-request ellama--current-request)))
+
+(advice-add #'keyboard-quit :before #'ellama--cancel-current-request)
 
 (defun ellama-stream (prompt &rest args)
   "Query ellama for PROMPT.
@@ -254,21 +372,33 @@ when the request completes (with BUFFER current)."
 	(set-marker-insertion-type start nil)
 	(set-marker-insertion-type end t)
 	(spinner-start ellama-spinner-type)
-	(llm-chat-streaming ellama-provider
-			    ellama--chat-prompt
-			    insert-text
-			    (lambda (text)
-			      (funcall insert-text text)
-			      (with-current-buffer buffer
-				(undo-amalgamate-change-group ellama--change-group)
-				(accept-change-group ellama--change-group)
-				(spinner-stop)
-				(funcall donecb text)))
-			    (lambda (_ msg)
-			      (with-current-buffer buffer
-				(cancel-change-group ellama--change-group)
-				(spinner-stop)
-				(funcall errcb msg))))))))
+	(setq ellama--current-request
+	      (llm-chat-streaming ellama-provider
+				  ellama--chat-prompt
+				  insert-text
+				  (lambda (text)
+				    (funcall insert-text text)
+				    (with-current-buffer buffer
+				      (undo-amalgamate-change-group ellama--change-group)
+				      (accept-change-group ellama--change-group)
+				      (spinner-stop)
+				      (funcall donecb text)
+				      (setq ellama--current-request nil)))
+				  (lambda (_ msg)
+				    (with-current-buffer buffer
+				      (cancel-change-group ellama--change-group)
+				      (spinner-stop)
+				      (funcall errcb msg)
+				      (setq ellama--current-request nil)))))))))
+
+(defun ellama-chat-done (text)
+  "Chat done.
+Will call `ellama-chat-done-callback' on TEXT."
+  (save-excursion
+    (goto-char (point-max))
+    (insert "\n\n"))
+  (when ellama-chat-done-callback
+    (funcall ellama-chat-done-callback text)))
 
 ;;;###autoload
 (defun ellama-chat (prompt)
@@ -286,39 +416,7 @@ when the request completes (with BUFFER current)."
 	      "## " ellama-assistant-nick ":\n")
       (ellama-stream prompt
 		     :session t
-		     :on-done (lambda (_) (save-excursion
-				      (goto-char (point-max))
-				      (insert "\n\n")))))))
-
-;;;###autoload
-(defalias 'ellama-ask 'ellama-chat)
-
-;;;###autoload
-(defalias 'ellama-code-complete 'ellama-complete-code)
-
-;;;###autoload
-(defalias 'ellama-code-add 'ellama-add-code)
-
-;;;###autoload
-(defalias 'ellama-code-edit 'ellama-change-code)
-
-;;###autoload
-(defalias 'ellama-code-improve 'ellama-enhance-code)
-
-;;;###autoload
-(defalias 'ellama-improve-wording 'ellama-enhance-wording)
-
-;;;###autoload
-(defalias 'ellama-improve-grammar 'ellama-enhance-grammar-spelling)
-
-;;;###autoload
-(defalias 'ellama-improve-conciseness 'ellama-make-concise)
-
-;;;###autoload
-(defalias 'ellama-make-format 'ellama-render)
-
-;;;###autoload
-(defalias 'ellama-ask-interactive 'ellama-ask)
+		     :on-done #'ellama-chat-done))))
 
 ;;;###autoload
 (defun ellama-ask-about ()
@@ -328,7 +426,7 @@ when the request completes (with BUFFER current)."
 	(text (if (region-active-p)
 		  (buffer-substring-no-properties (region-beginning) (region-end))
 		(buffer-substring-no-properties (point-min) (point-max)))))
-    (ellama-chat (format "Text:\n%s\nRegarding this text, %s" text input))))
+    (ellama-chat (format ellama-ask-about-prompt-template text input))))
 
 ;;;###autoload
 (defun ellama-ask-selection ()
@@ -361,7 +459,10 @@ when the request completes (with BUFFER current)."
 
 (defun ellama-instant (prompt)
   "Prompt ellama for PROMPT to reply instantly."
-  (let ((buffer (get-buffer-create (make-temp-name ellama-buffer))))
+  (let* ((buffer-name (ellama-generate-name ellama-provider real-this-command prompt))
+	 (buffer (get-buffer-create (if (get-buffer buffer-name)
+					(make-temp-name (concat buffer-name " "))
+				      buffer-name))))
     (display-buffer buffer)
     (ellama-stream prompt :buffer buffer (point-min))))
 
@@ -371,17 +472,19 @@ when the request completes (with BUFFER current)."
   (interactive)
   (if (region-active-p)
       (ellama-instant
-       (format "Translate the following text to %s:\n%s"
+       (format ellama-translate-region-prompt-template
 	       ellama-language
 	       (buffer-substring-no-properties (region-beginning) (region-end))))
     (ellama-instant
-     (format "Translate %s to %s" (thing-at-point 'word) ellama-language))))
+     (format ellama-translate-word-prompt-template
+	     (thing-at-point 'word) ellama-language))))
 
 ;;;###autoload
 (defun ellama-define-word ()
   "Find definition of current word."
   (interactive)
-  (ellama-instant (format "Define %s" (thing-at-point 'word))))
+  (ellama-instant (format ellama-define-word-prompt-template
+			  (thing-at-point 'word))))
 
 ;;;###autoload
 (defun ellama-summarize ()
@@ -390,7 +493,7 @@ when the request completes (with BUFFER current)."
   (let ((text (if (region-active-p)
 		  (buffer-substring-no-properties (region-beginning) (region-end))
 		(buffer-substring-no-properties (point-min) (point-max)))))
-    (ellama-instant (format "Text:\n%s\nSummarize it." text))))
+    (ellama-instant (format ellama-summarize-prompt-template text))))
 
 ;;;###autoload
 (defun ellama-code-review ()
@@ -399,7 +502,7 @@ when the request completes (with BUFFER current)."
   (let ((text (if (region-active-p)
 		  (buffer-substring-no-properties (region-beginning) (region-end))
 		(buffer-substring-no-properties (point-min) (point-max)))))
-    (ellama-instant (format "Review the following code and make concise suggestions:\n```\n%s\n```" text))))
+    (ellama-instant (format ellama-code-review-prompt-template text))))
 
 ;;;###autoload
 (defun ellama-change (change)
@@ -415,30 +518,30 @@ when the request completes (with BUFFER current)."
     (kill-region beg end)
     (ellama-stream
      (format
-      "Change the following text, %s, just output the final text without additional quotes around it:\n%s"
+      ellama-change-prompt-template
       change text)
      :point beg)))
 
 ;;;###autoload
-(defun ellama-enhance-grammar-spelling ()
+(defun ellama-improve-grammar ()
   "Enhance the grammar and spelling in the currently selected region or buffer."
   (interactive)
-  (ellama-change "improve grammar and spelling"))
+  (ellama-change ellama-improve-grammar-prompt-template))
 
 ;;;###autoload
-(defun ellama-enhance-wording ()
+(defun ellama-improve-wording ()
   "Enhance the wording in the currently selected region or buffer."
   (interactive)
-  (ellama-change "use better wording"))
+  (ellama-change ellama-improve-wording-prompt-template))
 
 ;;;###autoload
-(defun ellama-make-concise ()
+(defun ellama-improve-conciseness ()
   "Make the text of the currently selected region or buffer concise and simple."
   (interactive)
-  (ellama-change "make it as simple and concise as possible"))
+  (ellama-change ellama-improve-conciseness-prompt-template))
 
 ;;;###autoload
-(defun ellama-change-code (change)
+(defun ellama-code-edit (change)
   "Change selected code or code in current buffer according to provided CHANGE."
   (interactive "sWhat needs to be changed in this code: ")
   (let* ((beg (if (region-active-p)
@@ -451,13 +554,13 @@ when the request completes (with BUFFER current)."
     (kill-region beg end)
     (ellama-stream
      (format
-      "Regarding the following code, %s, only ouput the result code in format ```language\n...\n```:\n```\n%s\n```"
+      ellama-code-edit-prompt-template
       change text)
      :filter #'ellama--code-filter
      :point beg)))
 
 ;;;###autoload
-(defun ellama-enhance-code ()
+(defun ellama-code-improve ()
   "Change selected code or code in current buffer according to provided CHANGE."
   (interactive)
   (let* ((beg (if (region-active-p)
@@ -470,13 +573,13 @@ when the request completes (with BUFFER current)."
     (kill-region beg end)
     (ellama-stream
      (format
-      "Enhance the following code, only ouput the result code in format ```language\n...\n```:\n```\n%s\n```"
+      ellama-code-improve-prompt-template
       text)
      :filter #'ellama--code-filter
      :point beg)))
 
 ;;;###autoload
-(defun ellama-complete-code ()
+(defun ellama-code-complete ()
   "Complete selected code or code in current buffer."
   (interactive)
   (let* ((beg (if (region-active-p)
@@ -488,13 +591,13 @@ when the request completes (with BUFFER current)."
 	 (text (buffer-substring-no-properties beg end)))
     (ellama-stream
      (format
-      "Continue the following code, only write new code in format ```language\n...\n```:\n```\n%s\n```"
+      ellama-code-complete-prompt-template
       text)
      :filter #'ellama--code-filter
      :point end)))
 
 ;;;###autoload
-(defun ellama-add-code (description)
+(defun ellama-code-add (description)
   "Add new code according to DESCRIPTION.
 Code will be generated with provided context from selected region or current
 buffer."
@@ -508,13 +611,13 @@ buffer."
 	 (text (buffer-substring-no-properties beg end)))
     (ellama-stream
      (format
-      "Context: \n```\n%s\n```\nBased on this context, %s, only ouput the result in format ```\n...\n```"
+      ellama-code-add-prompt-template
       text description)
      :filter #'ellama--code-filter)))
 
 
 ;;;###autoload
-(defun ellama-render (needed-format)
+(defun ellama-make-format (needed-format)
   "Render selected text or text in current buffer as NEEDED-FORMAT."
   (interactive "sSpecify required format: ")
   (let* ((beg (if (region-active-p)
@@ -527,7 +630,7 @@ buffer."
     (kill-region beg end)
     (ellama-stream
      (format
-      "Render the following text as a %s:\n%s"
+      ellama-make-format-prompt-template
       needed-format text)
      :point beg)))
 
@@ -535,13 +638,13 @@ buffer."
 (defun ellama-make-list ()
   "Create markdown list from active region or current buffer."
   (interactive)
-  (ellama-render "markdown list"))
+  (ellama-make-format ellama-make-list-prompt-template))
 
 ;;;###autoload
 (defun ellama-make-table ()
   "Create markdown table from active region or current buffer."
   (interactive)
-  (ellama-render "markdown table"))
+  (ellama-make-format ellama-make-table-prompt-template))
 
 (defun ellama-summarize-webpage (url)
   "Summarize webpage fetched from URL."
@@ -563,14 +666,21 @@ buffer."
 (defun ellama-get-ollama-local-model ()
   "Return llm provider for interactively selected ollama model."
   (interactive)
+  (declare-function llm-ollama-p "ext:llm-ollama")
+  (declare-function llm-ollama-host "ext:llm-ollama")
+  (declare-function llm-ollama-port "ext:llm-ollama")
   (let ((model-name
 	 (completing-read "Select ollama model: "
 			  (mapcar (lambda (s)
 				    (car (split-string s)))
 				  (seq-drop
-				   (process-lines ellama-ollama-binary "ls") 1)))))
+				   (process-lines ellama-ollama-binary "ls") 1))))
+	(host (when (llm-ollama-p ellama-provider)
+		(llm-ollama-host ellama-provider)))
+	(port (when (llm-ollama-p ellama-provider)
+		(llm-ollama-port ellama-provider))))
     (make-llm-ollama
-     :chat-model model-name :embedding-model model-name)))
+     :chat-model model-name :embedding-model model-name :host host :port port)))
 
 ;;;###autoload
 (defun ellama-provider-select ()
