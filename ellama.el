@@ -6,7 +6,7 @@
 ;; URL: http://github.com/s-kostyaev/ellama
 ;; Keywords: help local tools
 ;; Package-Requires: ((emacs "28.1") (llm "0.6.0") (spinner "1.7.4") (dash "2.19.1"))
-;; Version: 0.7.1
+;; Version: 0.7.2
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Created: 8th Oct 2023
 
@@ -387,7 +387,8 @@ PROMPT is a variable contains last prompt in this session."
 
 (defun ellama-generate-name (provider action prompt)
   "Generate name for ellama ACTION by PROVIDER according to PROMPT."
-  (let ((prompt-words (split-string prompt)))
+  (let* ((cleaned-prompt (replace-regexp-in-string "/" "_" prompt))
+         (prompt-words (split-string cleaned-prompt)))
     (string-join
      (flatten-tree
       (list (split-string (format "%s" action) "-")
