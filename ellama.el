@@ -6,7 +6,7 @@
 ;; URL: http://github.com/s-kostyaev/ellama
 ;; Keywords: help local tools
 ;; Package-Requires: ((emacs "28.1") (llm "0.6.0") (spinner "1.7.4") (dash "2.19.1"))
-;; Version: 0.7.2
+;; Version: 0.7.5
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Created: 8th Oct 2023
 
@@ -254,8 +254,8 @@ It should be a function with single argument generated text string."
   :group 'ellama
   :type 'function)
 
-(defcustom ellama-instant-mode 'org-mode
-  "Major mode for ellama instant commands."
+(defcustom ellama-major-mode 'org-mode
+  "Major mode for ellama commands."
   :group 'ellama
   :type 'symbol)
 
@@ -264,6 +264,31 @@ It should be a function with single argument generated text string."
 Too low value can break generated code by splitting long comment lines."
   :group 'ellama
   :type 'integer)
+
+(defcustom ellama-session-auto-save t
+  "Automatically save ellama sessions if set."
+  :group 'ellama
+  :type 'boolean)
+
+(define-minor-mode ellama-session-mode
+  "Minor mode for ellama session buffers."
+  :interactive nil
+  (if ellama-session-mode
+      (progn
+        (add-hook 'after-save-hook 'ellama--save-session nil t)
+        (add-hook 'kill-buffer-hook 'ellama--session-deactivate nil t))
+    (remove-hook 'kill-buffer-hook 'ellama--session-deactivate)
+    (remove-hook 'after-save-hook 'ellama--save-session)
+    (ellama--session-deactivate)))
+
+(define-minor-mode ellama-request-mode
+  "Minor mode for ellama buffers with active request to llm."
+  :interactive nil
+  :keymap '(([remap keyboard-quit] . ellama--cancel-current-request-and-quit))
+  (if ellama-request-mode
+      (add-hook 'kill-buffer-hook 'ellama--cancel-current-request nil t)
+    (remove-hook 'kill-buffer-hook 'ellama--cancel-current-request)
+    (ellama--cancel-current-request)))
 
 (defvar-local ellama--change-group nil)
 
@@ -399,9 +424,10 @@ PROMPT is a variable contains last prompt in this session."
 	    (format "(%s)" (llm-name provider))))
      " ")))
 
-(defun ellama-new-session (provider prompt)
+(defun ellama-new-session (provider prompt &optional ephemeral)
   "Create new ellama session with unique id.
-Provided PROVIDER and PROMPT will be used in new session."
+Provided PROVIDER and PROMPT will be used in new session.
+If EPHEMERAL non nil new session will not be associated with any file."
   (let* ((name (ellama-generate-name provider 'ellama prompt))
 	 (count 1)
 	 (name-with-suffix (format "%s %d" name count))
@@ -411,44 +437,48 @@ Provided PROVIDER and PROMPT will be used in new session."
 		 (setq count (+ count 1))
 		 (setq name-with-suffix (format "%s %d" name count)))
 	       name-with-suffix))
-	 (file-name (file-name-concat
-		     ellama-sessions-directory
-		     (concat id "." ellama-session-file-extension)))
+	 (file-name (when (and (not ephemeral)
+			       ellama-session-auto-save)
+		      (file-name-concat
+		       ellama-sessions-directory
+		       (concat id "." ellama-session-file-extension))))
 	 (session (make-ellama-session
 		   :id id :provider provider :file file-name))
-	 (buffer (progn
-		   (make-directory ellama-sessions-directory t)
-		   (find-file-noselect file-name))))
+	 (buffer (if file-name
+		     (progn
+		       (make-directory ellama-sessions-directory t)
+		       (find-file-noselect file-name))
+		   (get-buffer-create id))))
     (setq ellama--current-session-id id)
     (puthash id buffer ellama--active-sessions)
     (with-current-buffer buffer
-      (setq ellama--current-session session))
+      (funcall ellama-major-mode)
+      (setq ellama--current-session session)
+      (ellama-session-mode +1))
     session))
 
-(defun ellama--cancel-current-request (&rest _)
+(defun ellama--cancel-current-request ()
   "Cancel current running request."
   (when ellama--current-request
-    (llm-cancel-request ellama--current-request)))
+    (llm-cancel-request ellama--current-request)
+    (setq ellama--current-request nil)))
 
-(advice-add #'keyboard-quit :before #'ellama--cancel-current-request)
+(defun ellama--cancel-current-request-and-quit ()
+  "Cancel the current request and quit."
+  (interactive)
+  (ellama--cancel-current-request)
+  (keyboard-quit))
 
-(defun ellama--session-deactivate (&rest args)
-  "Deactivate current session with ARGS."
-  (when-let* ((buf (car args))
-	      (session
-	       (with-current-buffer buf
-		 ellama--current-session))
-	      (id (ellama-session-id session)))
-    (when (string= (if (bufferp buf)
-		       (buffer-name buf)
-		     buf)
-		   (buffer-name (ellama-get-session-buffer id)))
-      (message "clearing %s" id)
+(defun ellama--session-deactivate ()
+  "Deactivate current session."
+  (ellama--cancel-current-request)
+  (when-let* ((session ellama--current-session)
+              (id (ellama-session-id session)))
+    (when (string= (buffer-name)
+                   (buffer-name (ellama-get-session-buffer id)))
       (remhash id ellama--active-sessions)
       (when (equal ellama--current-session-id id)
 	(setq ellama--current-session-id nil)))))
-
-(advice-add #'kill-buffer :before #'ellama--session-deactivate)
 
 (defun ellama--get-session-file-name (file-name)
   "Get ellama session file name for FILE-NAME."
@@ -460,19 +490,14 @@ Provided PROVIDER and PROMPT will be used in new session."
 	   (concat "." base-name ".session.el"))))
     session-file-name))
 
-(defun ellama--save-session (&rest _)
+(defun ellama--save-session ()
   "Save current ellama session."
   (when ellama--current-session
     (let* ((session ellama--current-session)
 	   (file-name (ellama-session-file session))
 	   (session-file-name (ellama--get-session-file-name file-name)))
-      (with-current-buffer (find-file-noselect session-file-name)
-	(delete-region (point-min) (point-max))
-	(insert (concat "(setq ellama--current-session " (prin1-to-string session)")"))
-	(save-buffer)
-	(kill-buffer)))))
-
-(advice-add #'save-buffer :before #'ellama--save-session)
+      (with-temp-file session-file-name
+	(insert "(setq ellama--current-session " (prin1-to-string session) ")")))))
 
 ;;;###autoload
 (defun ellama-load-session ()
@@ -499,7 +524,8 @@ Provided PROVIDER and PROMPT will be used in new session."
       (eval (read session-buffer))
       (setq ellama--current-session-id (ellama-session-id ellama--current-session))
       (puthash (ellama-session-id ellama--current-session)
-	       buffer ellama--active-sessions))
+	       buffer ellama--active-sessions)
+      (ellama-session-mode +1))
     (kill-buffer session-buffer)
     (display-buffer buffer)))
 
@@ -513,9 +539,7 @@ Provided PROVIDER and PROMPT will be used in new session."
 	 (buffer (ellama-get-session-buffer id))
 	 (file (buffer-file-name buffer))
 	 (session-file (ellama--get-session-file-name file)))
-    (with-current-buffer buffer
-      (ellama--session-deactivate)
-      (kill-buffer))
+    (kill-buffer buffer)
     (delete-file file t)
     (delete-file session-file t)))
 
@@ -580,6 +604,9 @@ strings before they're inserted into the BUFFER.
 
 :session SESSION -- SESSION is a ellama conversation session.
 
+:ephemeral-session BOOL -- if BOOL is set session will not be saved to named
+file by default.
+
 :on-error ON-ERROR -- ON-ERROR a function that's called with an error message on
 failure (with BUFFER current).
 
@@ -609,6 +636,7 @@ when the request completes (with BUFFER current)."
 				 (llm-make-simple-chat-prompt prompt)))
 		       (llm-make-simple-chat-prompt prompt))))
     (with-current-buffer buffer
+      (ellama-request-mode +1)
       (let* ((start (make-marker))
 	     (end (make-marker))
 	     (insert-text
@@ -652,20 +680,24 @@ when the request completes (with BUFFER current)."
 				      (accept-change-group ellama--change-group)
 				      (spinner-stop)
 				      (funcall donecb text)
-				      (setq ellama--current-request nil)))
+				      (setq ellama--current-request nil)
+				      (ellama-request-mode -1)))
 				  (lambda (_ msg)
 				    (with-current-buffer buffer
 				      (cancel-change-group ellama--change-group)
 				      (spinner-stop)
 				      (funcall errcb msg)
-				      (setq ellama--current-request nil)))))))))
+				      (setq ellama--current-request nil)
+				      (ellama-request-mode -1)))))))))
 
 (defun ellama-chat-done (text)
   "Chat done.
 Will call `ellama-chat-done-callback' on TEXT."
   (save-excursion
     (goto-char (point-max))
-    (insert "\n\n"))
+    (insert "\n\n")
+    (when ellama-session-auto-save
+      (save-buffer)))
   (when ellama-chat-done-callback
     (funcall ellama-chat-done-callback text)))
 
@@ -756,10 +788,10 @@ If CREATE-SESSION set, creates new session even if there is an active session."
 	 (buffer (get-buffer-create (if (get-buffer buffer-name)
 					(make-temp-name (concat buffer-name " "))
 				      buffer-name)))
-	 (filter (when (equal ellama-instant-mode 'org-mode)
+	 (filter (when (equal ellama-major-mode 'org-mode)
 		   'ellama--translate-markdown-to-org-filter)))
     (with-current-buffer buffer
-      (funcall ellama-instant-mode))
+      (funcall ellama-major-mode))
     (display-buffer buffer)
     (ellama-stream prompt
 		   :buffer buffer
