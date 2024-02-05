@@ -6,7 +6,7 @@
 ;; URL: http://github.com/s-kostyaev/ellama
 ;; Keywords: help local tools
 ;; Package-Requires: ((emacs "28.1") (llm "0.6.0") (spinner "1.7.4") (dash "2.19.1"))
-;; Version: 0.7.5
+;; Version: 0.7.6
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Created: 8th Oct 2023
 
@@ -497,7 +497,7 @@ If EPHEMERAL non nil new session will not be associated with any file."
 	   (file-name (ellama-session-file session))
 	   (session-file-name (ellama--get-session-file-name file-name)))
       (with-temp-file session-file-name
-	(insert "(setq ellama--current-session " (prin1-to-string session) ")")))))
+	(insert (prin1-to-string session))))))
 
 ;;;###autoload
 (defun ellama-load-session ()
@@ -519,9 +519,29 @@ If EPHEMERAL non nil new session will not be associated with any file."
 	      (buffer (find-file-noselect file-name))
 	      (session-buffer (find-file-noselect session-file-name)))
     (with-current-buffer session-buffer
-      (goto-char (point-min)))
+      (goto-char (point-min))
+      ;; old sessions support
+      (when (string= "(setq "
+		     (buffer-substring-no-properties 1 7))
+	(goto-char (point-min))
+	;; skip "("
+	(forward-char)
+	;; skip setq
+	(forward-sexp)
+	;; skip ellama--current-session
+	(forward-sexp)
+	;; skip space
+	(forward-char)
+	;; remove all above
+	(kill-region (point-min) (point))
+	(goto-char (point-max))
+	;; remove ")"
+	(delete-char -1)
+	;; save session in new format
+	(save-buffer)
+	(goto-char (point-min))))
     (with-current-buffer buffer
-      (eval (read session-buffer))
+      (setq ellama--current-session (read session-buffer))
       (setq ellama--current-session-id (ellama-session-id ellama--current-session))
       (puthash (ellama-session-id ellama--current-session)
 	       buffer ellama--active-sessions)
