@@ -6,7 +6,7 @@
 ;; URL: http://github.com/s-kostyaev/ellama
 ;; Keywords: help local tools
 ;; Package-Requires: ((emacs "28.1") (llm "0.6.0") (spinner "1.7.4") (dash "2.19.1"))
-;; Version: 0.8.1
+;; Version: 0.8.2
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Created: 8th Oct 2023
 
@@ -463,8 +463,11 @@ CONTEXT contains context for next request."
   (let ((provider (or ellama-naming-provider ellama-provider)))
     (string-trim-right
      (string-trim
-      (llm-chat provider (llm-make-simple-chat-prompt
-			  (format ellama-get-name-template prompt))))
+      (seq-first
+       (split-string
+	(llm-chat provider (llm-make-simple-chat-prompt
+			    (format ellama-get-name-template prompt)))
+	"\n")))
      "\\.")))
 
 (defun ellama-generate-name-by-llm (provider _action prompt)
@@ -485,7 +488,7 @@ CONTEXT contains context for next request."
 
 (defun ellama-generate-name (provider action prompt)
   "Generate name for ellama ACTION by PROVIDER according to PROMPT."
-  (funcall ellama-naming-scheme provider action prompt))
+  (replace-regexp-in-string "/" "_" (funcall ellama-naming-scheme provider action prompt)))
 
 (defvar ellama--new-session-context nil)
 
@@ -802,8 +805,10 @@ failure (with BUFFER current).
 
 :on-done ON-DONE -- ON-DONE a function that's called with the full response text
 when the request completes (with BUFFER current)."
-  (let* ((provider (or (plist-get args :provider) ellama-provider))
-	 (session (plist-get args :session))
+  (let* ((session (plist-get args :session))
+	 (provider (if session
+		       (ellama-session-provider session)
+		     (or (plist-get args :provider) ellama-provider)))
 	 (buffer (or (plist-get args :buffer)
 		     (when (ellama-session-p session)
 		       (ellama-get-session-buffer (ellama-session-id session)))
@@ -1221,7 +1226,8 @@ buffer."
     (setq ellama-provider
 	  (eval (alist-get
 		 (completing-read "Select model: " variants)
-		 providers nil nil #'string=)))))
+		 providers nil nil #'string=)))
+    (setq ellama--current-session-id nil)))
 
 (provide 'ellama)
 ;;; ellama.el ends here.
