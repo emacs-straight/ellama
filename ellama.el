@@ -6,7 +6,7 @@
 ;; URL: http://github.com/s-kostyaev/ellama
 ;; Keywords: help local tools
 ;; Package-Requires: ((emacs "28.1") (llm "0.6.0") (spinner "1.7.4") (dash "2.19.1"))
-;; Version: 0.8.5
+;; Version: 0.8.7
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Created: 8th Oct 2023
 
@@ -931,10 +931,13 @@ Will call `ellama-chat-done-callback' on TEXT."
     (funcall ellama-chat-done-callback text)))
 
 ;;;###autoload
-(defun ellama-chat (prompt &optional create-session)
+(defun ellama-chat (prompt &optional create-session &rest args)
   "Send PROMPT to ellama chat with conversation history.
 
-If CREATE-SESSION set, creates new session even if there is an active session."
+If CREATE-SESSION set, creates new session even if there is an active session.
+ARGS contains keys for fine control.
+
+:provider PROVIDER -- PROVIDER is an llm provider for generation."
   (interactive "sAsk ellama: ")
   (let* ((providers (progn
 		      (push '("default model" . ellama-provider)
@@ -949,7 +952,8 @@ If CREATE-SESSION set, creates new session even if there is an active session."
 		       (eval (alist-get
 			      (completing-read "Select model: " variants)
 			      providers nil nil #'string=))
-		     ellama-provider))
+		     (or (plist-get :provider args)
+			 ellama-provider)))
 	 (session (if (or create-session
 			  current-prefix-arg
 			  (and (not ellama--current-session)
@@ -1242,8 +1246,11 @@ buffer."
 		(llm-ollama-host ellama-provider)))
 	(port (when (llm-ollama-p ellama-provider)
 		(llm-ollama-port ellama-provider))))
-    (make-llm-ollama
-     :chat-model model-name :embedding-model model-name :host host :port port)))
+    (if host
+	(make-llm-ollama
+	 :chat-model model-name :embedding-model model-name :host host :port port)
+      (make-llm-ollama
+       :chat-model model-name :embedding-model model-name))))
 
 ;;;###autoload
 (defun ellama-provider-select ()
