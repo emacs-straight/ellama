@@ -6,7 +6,7 @@
 ;; URL: http://github.com/s-kostyaev/ellama
 ;; Keywords: help local tools
 ;; Package-Requires: ((emacs "28.1") (llm "0.6.0") (spinner "1.7.4"))
-;; Version: 0.8.11
+;; Version: 0.8.13
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Created: 8th Oct 2023
 
@@ -55,10 +55,10 @@
   :group 'ellama
   :type 'string)
 
-(defcustom ellama-nick-prefix "**"
-  "User and assistant nick prefix in logs."
+(defcustom ellama-nick-prefix-depth 2
+  "Prefix depth."
   :group 'ellama
-  :type 'string)
+  :type 'integer)
 
 (defcustom ellama-language "English"
   "Language for ellama translation."
@@ -414,11 +414,6 @@ This filter contains only subset of markdown syntax to be good enough."
 	   ;; If ellama-enable-keymap is nil, remove the key bindings
 	   (define-key global-map (kbd ellama-keymap-prefix) nil))))
 
-(defcustom ellama-session-file-extension "org"
-  "File extension for saving ellama session."
-  :type 'string
-  :group 'ellama)
-
 (defcustom ellama-sessions-directory (file-truename
 				      (file-name-concat
 				       user-emacs-directory
@@ -504,6 +499,20 @@ CONTEXT contains context for next request."
 
 (defvar ellama--new-session-context nil)
 
+(defun ellama-get-nick-prefix-for-mode ()
+  "Return preferred header prefix char based om the current mode.
+Defaults to #, but supports `org-mode'.  Depends on `ellama-major-mode'."
+  (let* ((prefix-char
+          (cond ((provided-mode-derived-p ellama-major-mode 'org-mode) ?*)
+                (t ?#))))
+    (make-string ellama-nick-prefix-depth prefix-char)))
+
+(defun ellama-get-session-file-extension ()
+  "Return file extension based om the current mode.
+Defaults to md, but supports org.  Depends on \"ellama-major-mode.\""
+  (cond ((provided-mode-derived-p ellama-major-mode 'org-mode) "org")
+        (t "md")))
+
 (defun ellama-new-session (provider prompt &optional ephemeral)
   "Create new ellama session with unique id.
 Provided PROVIDER and PROMPT will be used in new session.
@@ -521,7 +530,7 @@ If EPHEMERAL non nil new session will not be associated with any file."
 			       ellama-session-auto-save)
 		      (file-name-concat
 		       ellama-sessions-directory
-		       (concat id "." ellama-session-file-extension))))
+		       (concat id "." (ellama-get-session-file-extension)))))
 	 (session (make-ellama-session
 		   :id id :provider provider :file file-name :context ellama--new-session-context))
 	 (buffer (if file-name
@@ -996,9 +1005,9 @@ Will call `ellama-chat-done-callback' on TEXT."
     (with-current-buffer buffer
       (save-excursion
 	(goto-char (point-max))
-	(insert ellama-nick-prefix " " ellama-user-nick ":\n"
+	(insert (ellama-get-nick-prefix-for-mode) " " ellama-user-nick ":\n"
 		(ellama--format-context session) result "\n\n"
-		ellama-nick-prefix " " ellama-assistant-nick ":\n")
+		(ellama-get-nick-prefix-for-mode) " " ellama-assistant-nick ":\n")
 	(ellama-stream result
 		       :session session
 		       :on-done (ellama--translate-generated-text-on-done translation-buffer)
@@ -1011,9 +1020,9 @@ Will call `ellama-chat-done-callback' on TEXT."
   (with-current-buffer translation-buffer
     (save-excursion
       (goto-char (point-max))
-      (insert ellama-nick-prefix " " ellama-user-nick ":\n"
+      (insert (ellama-get-nick-prefix-for-mode) " " ellama-user-nick ":\n"
 	      (ellama--format-context session) prompt "\n\n"
-	      ellama-nick-prefix " " ellama-assistant-nick ":\n")
+	      (ellama-get-nick-prefix-for-mode) " " ellama-assistant-nick ":\n")
       (ellama-stream
        (format ellama-translation-template
 	       "english"
@@ -1034,48 +1043,45 @@ ARGS contains keys for fine control.
 
 :provider PROVIDER -- PROVIDER is an llm provider for generation."
   (interactive "sAsk ellama: ")
-  (let* ((providers (progn
-		      (push '("default model" . ellama-provider)
-			    ellama-providers)
-		      (if (and ellama-ollama-binary
-			       (file-exists-p ellama-ollama-binary))
-			  (push '("ollama model" . (ellama-get-ollama-local-model))
-				ellama-providers)
-			ellama-providers)))
-	 (variants (mapcar #'car providers))
-	 (provider (if current-prefix-arg
-		       (eval (alist-get
-			      (completing-read "Select model: " variants)
-			      providers nil nil #'string=))
-		     (or (plist-get args :provider)
-			 ellama-provider)))
-	 (session (if (or create-session
-			  current-prefix-arg
-			  (and (not ellama--current-session)
-			       (not ellama--current-session-id)))
-		      (ellama-new-session provider prompt)
-		    (or ellama--current-session
-			(with-current-buffer (ellama-get-session-buffer
-					      ellama--current-session-id)
-			  ellama--current-session))))
-	 (buffer (ellama-get-session-buffer
-		  (ellama-session-id session)))
-	 (file-name (ellama-session-file session))
-	 (translation-buffer (when ellama-chat-translation-enabled
-			       (if file-name
-				   (progn
-				     (find-file-noselect
-				      (ellama--get-translation-file-name file-name)))
-				 (get-buffer-create (ellama-session-id session))))))
+  (let* ((providers (append
+                     `(("default model" . ellama-provider)
+		               ,(if (and ellama-ollama-binary (file-exists-p ellama-ollama-binary))
+			                '("ollama model" . (ellama-get-ollama-local-model))))
+                     ellama-providers))
+	     (variants (mapcar #'car providers))
+	     (provider (if current-prefix-arg
+		               (eval (alist-get
+			                  (completing-read "Select model: " variants)
+			                  providers nil nil #'string=))
+		             (or (plist-get args :provider)
+			             ellama-provider)))
+	     (session (if (or create-session
+			              current-prefix-arg
+			              (and (not ellama--current-session)
+			                   (not ellama--current-session-id)))
+		              (ellama-new-session provider prompt)
+		            (or ellama--current-session
+			            (with-current-buffer (ellama-get-session-buffer
+					                          ellama--current-session-id)
+			              ellama--current-session))))
+	     (buffer (ellama-get-session-buffer
+		          (ellama-session-id session)))
+	     (file-name (ellama-session-file session))
+	     (translation-buffer (when ellama-chat-translation-enabled
+			                   (if file-name
+				                   (progn
+				                     (find-file-noselect
+				                      (ellama--get-translation-file-name file-name)))
+				                 (get-buffer-create (ellama-session-id session))))))
     (if ellama-chat-translation-enabled
 	(ellama--translate-interaction prompt translation-buffer buffer session)
       (display-buffer buffer)
       (with-current-buffer buffer
 	(save-excursion
 	  (goto-char (point-max))
-	  (insert ellama-nick-prefix " " ellama-user-nick ":\n"
+	  (insert (ellama-get-nick-prefix-for-mode) " " ellama-user-nick ":\n"
 		  (ellama--format-context session) prompt "\n\n"
-		  ellama-nick-prefix " " ellama-assistant-nick ":\n")
+		  (ellama-get-nick-prefix-for-mode) " " ellama-assistant-nick ":\n")
 	  (ellama-stream prompt
 			 :session session
 			 :on-done #'ellama-chat-done
@@ -1376,12 +1382,12 @@ buffer."
 (defun ellama-provider-select ()
   "Select ellama provider."
   (interactive)
-  (let* ((providers (if (and ellama-ollama-binary
-			     (file-exists-p ellama-ollama-binary))
-			(push '("ollama model" . (ellama-get-ollama-local-model))
-			      ellama-providers)
-		      ellama-providers))
-	 (variants (mapcar #'car providers)))
+  (let* ((providers (append
+                     `(("default model" . ellama-provider)
+		               ,(if (and ellama-ollama-binary (file-exists-p ellama-ollama-binary))
+			                '("ollama model" . (ellama-get-ollama-local-model))))
+                     ellama-providers))
+	     (variants (mapcar #'car providers)))
     (setq ellama-provider
 	  (eval (alist-get
 		 (completing-read "Select model: " variants)
