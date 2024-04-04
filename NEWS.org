@@ -1,3 +1,7 @@
+* Version 0.9.0
+- Improve context management. Make it extendable.
+* Version 0.8.14
+- Don't insert blank line on code change actions.
 * Version 0.8.13
 - Simplify switching between org and markdown.
 * Version 0.8.12
