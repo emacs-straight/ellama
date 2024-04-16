@@ -6,7 +6,7 @@
 ;; URL: http://github.com/s-kostyaev/ellama
 ;; Keywords: help local tools
 ;; Package-Requires: ((emacs "28.1") (llm "0.6.0") (spinner "1.7.4"))
-;; Version: 0.9.0
+;; Version: 0.9.1
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Created: 8th Oct 2023
 
@@ -110,6 +110,7 @@
     ;; summarize
     (define-key map (kbd "s s") 'ellama-summarize)
     (define-key map (kbd "s w") 'ellama-summarize-webpage)
+    (define-key map (kbd "s c") 'ellama-summarize-killring)
     ;; session
     (define-key map (kbd "s l") 'ellama-load-session)
     (define-key map (kbd "s r") 'ellama-session-rename)
@@ -1261,6 +1262,15 @@ ARGS contains keys for fine control.
 		  (buffer-substring-no-properties (region-beginning) (region-end))
 		(buffer-substring-no-properties (point-min) (point-max)))))
     (ellama-instant (format ellama-summarize-prompt-template text))))
+
+;;;###autoload
+(defun ellama-summarize-killring ()
+  "Summarize text from the kill ring."
+  (interactive)
+  (let ((text (current-kill 0)))
+    (if (string-empty-p text)
+        (message "No text in the kill ring to summarize.")
+      (ellama-instant (format ellama-summarize-prompt-template text)))))
 
 ;;;###autoload
 (defun ellama-code-review ()
