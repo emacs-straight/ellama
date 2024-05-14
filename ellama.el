@@ -6,7 +6,7 @@
 ;; URL: http://github.com/s-kostyaev/ellama
 ;; Keywords: help local tools
 ;; Package-Requires: ((emacs "28.1") (llm "0.6.0") (spinner "1.7.4"))
-;; Version: 0.9.2
+;; Version: 0.9.3
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Created: 8th Oct 2023
 
@@ -40,6 +40,7 @@
 (require 'llm)
 (require 'spinner)
 (require 'info)
+(require 'shr)
 (eval-when-compile (require 'rx))
 
 (defgroup ellama nil
@@ -428,6 +429,11 @@ This filter contains only subset of markdown syntax to be good enough."
   "LLM provider for generating names."
   :group 'ellama
   :type '(sexp :validate 'cl-struct-p))
+
+(defcustom ellama-always-show-chain-steps nil
+  "Always show ellama chain buffers."
+  :type 'boolean
+  :group 'ellama)
 
 (defvar-local ellama--current-session nil)
 
@@ -1039,6 +1045,50 @@ when the request completes (with BUFFER current)."
 				      (setq ellama--current-request nil)
 				      (ellama-request-mode -1)))))))))
 
+(defun ellama-chain (initial-prompt forms)
+  "Call chain of FORMS on INITIAL-PROMPT.
+Each form is a plist that can contain different options:
+
+:provider PROVIDER - use PROVIDER instead of `ellama-provider'.
+
+:transform FUNCTION - use FUNCTION to transform result of previous step to new
+prompt.
+
+:session SESSION - use SESSION in current step.
+
+:chat BOOL - if BOOL use chat buffer, otherwise use temp buffer.  Make sense for
+last step only.
+
+:show BOOL - if BOOL show buffer for this step."
+  (let* ((hd (car forms))
+	 (tl (cdr forms))
+	 (provider (or (plist-get hd :provider) ellama-provider))
+	 (transform (or (plist-get hd :transform) #'identity))
+	 (prompt (apply transform (list initial-prompt)))
+	 (session (plist-get hd :session))
+	 (chat (plist-get hd :chat))
+	 (show (or (plist-get hd :show) ellama-always-show-chain-steps chat))
+	 (buf (if (or (and tl (not chat)) (not session))
+		  (get-buffer-create (make-temp-name
+				      (ellama-generate-name provider real-this-command prompt)))
+		(ellama-get-session-buffer ellama--current-session-id))))
+    (when show
+      (display-buffer buf))
+    (with-current-buffer buf
+      (funcall ellama-major-mode))
+    (if chat
+	(ellama-chat prompt nil :provider provider)
+      (ellama-stream
+       prompt
+       :provider provider
+       :buffer buf
+       :session session
+       :filter (when (derived-mode-p 'org-mode)
+		 #'ellama--translate-markdown-to-org-filter)
+       :on-done (lambda (res)
+		  (when tl
+		    (ellama-chain res tl)))))))
+
 (defun ellama-chat-done (text)
   "Chat done.
 Will call `ellama-chat-done-callback' on TEXT."
@@ -1120,34 +1170,34 @@ ARGS contains keys for fine control.
   (interactive "sAsk ellama: ")
   (let* ((providers (append
                      `(("default model" . ellama-provider)
-		               ,(if (and ellama-ollama-binary (file-exists-p ellama-ollama-binary))
-			                '("ollama model" . (ellama-get-ollama-local-model))))
+		       ,(if (and ellama-ollama-binary (file-exists-p ellama-ollama-binary))
+			    '("ollama model" . (ellama-get-ollama-local-model))))
                      ellama-providers))
-	     (variants (mapcar #'car providers))
-	     (provider (if current-prefix-arg
-		               (eval (alist-get
-			                  (completing-read "Select model: " variants)
-			                  providers nil nil #'string=))
-		             (or (plist-get args :provider)
-			             ellama-provider)))
-	     (session (if (or create-session
-			              current-prefix-arg
-			              (and (not ellama--current-session)
-			                   (not ellama--current-session-id)))
-		              (ellama-new-session provider prompt)
-		            (or ellama--current-session
-			            (with-current-buffer (ellama-get-session-buffer
-					                          ellama--current-session-id)
-			              ellama--current-session))))
-	     (buffer (ellama-get-session-buffer
-		          (ellama-session-id session)))
-	     (file-name (ellama-session-file session))
-	     (translation-buffer (when ellama-chat-translation-enabled
-			                   (if file-name
-				                   (progn
-				                     (find-file-noselect
-				                      (ellama--get-translation-file-name file-name)))
-				                 (get-buffer-create (ellama-session-id session))))))
+	 (variants (mapcar #'car providers))
+	 (provider (if current-prefix-arg
+		       (eval (alist-get
+			      (completing-read "Select model: " variants)
+			      providers nil nil #'string=))
+		     (or (plist-get args :provider)
+			 ellama-provider)))
+	 (session (if (or create-session
+			  current-prefix-arg
+			  (and (not ellama--current-session)
+			       (not ellama--current-session-id)))
+		      (ellama-new-session provider prompt)
+		    (or ellama--current-session
+			(with-current-buffer (ellama-get-session-buffer
+					      ellama--current-session-id)
+			  ellama--current-session))))
+	 (buffer (ellama-get-session-buffer
+		  (ellama-session-id session)))
+	 (file-name (ellama-session-file session))
+	 (translation-buffer (when ellama-chat-translation-enabled
+			       (if file-name
+				   (progn
+				     (find-file-noselect
+				      (ellama--get-translation-file-name file-name)))
+				 (get-buffer-create (ellama-session-id session))))))
     (if ellama-chat-translation-enabled
 	(ellama--translate-interaction prompt translation-buffer buffer session)
       (display-buffer buffer)
@@ -1155,7 +1205,7 @@ ARGS contains keys for fine control.
 	(save-excursion
 	  (goto-char (point-max))
 	  (insert (ellama-get-nick-prefix-for-mode) " " ellama-user-nick ":\n"
-		  (ellama--format-context session) prompt "\n\n"
+		  (ellama--format-context session) (ellama--fill-long-lines prompt) "\n\n"
 		  (ellama-get-nick-prefix-for-mode) " " ellama-assistant-nick ":\n")
 	  (ellama-stream prompt
 			 :session session
@@ -1426,11 +1476,13 @@ buffer."
 (defun ellama-summarize-webpage (url)
   "Summarize webpage fetched from URL.
 
-Summarize the URL at point if `thing-at-point' is present, otherwise
-prompt user for URL to summarize."
+Summarize the URL at point if `thing-at-point' is present, or using
+`shr-url-at-point' if a URL is at point in modes like `eww' or `elfeed',
+otherwise prompt user for URL to summarize."
   (interactive
    (list
-    (if-let ((url (and (fboundp 'thing-at-point) (thing-at-point 'url))))
+    (if-let ((url (or (and (fboundp 'thing-at-point) (thing-at-point 'url))
+                      (shr-url-at-point nil))))
         url
       (read-string "Enter URL you want to summarize: "))))
   (let ((buffer-name (url-retrieve-synchronously url t)))
