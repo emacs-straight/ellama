@@ -6,7 +6,7 @@
 ;; URL: http://github.com/s-kostyaev/ellama
 ;; Keywords: help local tools
 ;; Package-Requires: ((emacs "28.1") (llm "0.6.0") (spinner "1.7.4"))
-;; Version: 0.9.4
+;; Version: 0.9.5
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Created: 8th Oct 2023
 
@@ -1192,6 +1192,15 @@ ARGS contains keys for fine control.
 			 ellama-provider)))
 	 (session (if (or create-session
 			  current-prefix-arg
+			  (and provider
+			       (or (plist-get args :provider)
+				   (not (equal provider ellama-provider)))
+			       ellama--current-session-id
+			       (with-current-buffer (ellama-get-session-buffer
+						     ellama--current-session-id)
+				 (not (equal
+				       provider
+				       (ellama-session-provider ellama--current-session)))))
 			  (and (not ellama--current-session)
 			       (not ellama--current-session-id)))
 		      (ellama-new-session provider prompt)
