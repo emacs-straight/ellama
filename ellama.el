@@ -6,7 +6,7 @@
 ;; URL: http://github.com/s-kostyaev/ellama
 ;; Keywords: help local tools
 ;; Package-Requires: ((emacs "28.1") (llm "0.6.0") (spinner "1.7.4"))
-;; Version: 0.9.7
+;; Version: 0.9.10
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Created: 8th Oct 2023
 
@@ -567,8 +567,16 @@ If EPHEMERAL non nil new session will not be associated with any file."
 		      (file-name-concat
 		       ellama-sessions-directory
 		       (concat id "." (ellama-get-session-file-extension)))))
+ 	 (previous-session
+	  (when ellama--current-session-id
+	    (with-current-buffer
+		(ellama-get-session-buffer ellama--current-session-id)
+	      ellama--current-session)))
 	 (session (make-ellama-session
-		   :id id :provider provider :file file-name :context ellama--new-session-context))
+		   :id id :provider provider :file file-name
+		   :context (if previous-session
+				(ellama-session-context previous-session)
+			      ellama--new-session-context)))
 	 (buffer (if file-name
 		     (progn
 		       (make-directory ellama-sessions-directory t)
@@ -945,6 +953,84 @@ If EPHEMERAL non nil new session will not be associated with any file."
 	(format "[[%s][%s]]:\n#+BEGIN_QUOTE\n%s\n#+END_QUOTE\n" url name content)
       (format "[[%s][%s]]" url name))))
 
+;; Info node quote context elements
+
+(defclass ellama-context-element-info-node-quote (ellama-context-element)
+  ((name :initarg :name :type string)
+   (content :initarg :content :type string))
+  "A structure for holding information about a context element.")
+
+(cl-defmethod ellama-context-element-extract
+  ((element ellama-context-element-info-node-quote))
+  "Extract the content of the context ELEMENT."
+  (oref element content))
+
+(cl-defmethod ellama-context-element-format
+  ((element ellama-context-element-info-node-quote) (mode (eql 'markdown-mode)))
+  "Format the context ELEMENT for the major MODE."
+  (ignore mode)
+  (with-slots (name content) element
+    (if ellama-show-quotes
+	(format "```emacs-lisp\n(info \"%s\")\n```\n%s\n\n"
+		name
+		(ellama--md-quote content))
+      (format "```emacs-lisp\n(info \"%s\")\n```\n" name))))
+
+(cl-defmethod ellama-context-element-format
+  ((element ellama-context-element-info-node-quote) (mode (eql 'org-mode)))
+  "Format the context ELEMENT for the major MODE."
+  (ignore mode)
+  (with-slots (name content) element
+    (if ellama-show-quotes
+	(format "[[%s][%s]]:\n#+BEGIN_QUOTE\n%s\n#+END_QUOTE\n"
+		(replace-regexp-in-string
+		 "(\\(.?*\\)) \\(.*\\)" "info:\\1#\\2" name)
+		(if (and ellama-chat-translation-enabled
+			 (not ellama--current-session))
+		    (ellama--translate-string name)
+		  name)
+		content)
+      (format "[[%s][%s]]"
+	      (replace-regexp-in-string
+	       "(\\(.?*\\)) \\(.*\\)" "info:\\1#\\2" name)
+	      (if (and ellama-chat-translation-enabled
+		       (not ellama--current-session))
+		  (ellama--translate-string name)
+		name)))))
+
+;; File quote context elements
+
+(defclass ellama-context-element-file-quote (ellama-context-element)
+  ((path :initarg :path :type string)
+   (content :initarg :content :type string))
+  "A structure for holding information about a context element.")
+
+(cl-defmethod ellama-context-element-extract
+  ((element ellama-context-element-file-quote))
+  "Extract the content of the context ELEMENT."
+  (oref element content))
+
+(cl-defmethod ellama-context-element-format
+  ((element ellama-context-element-file-quote) (mode (eql 'markdown-mode)))
+  "Format the context ELEMENT for the major MODE."
+  (ignore mode)
+  (with-slots (path content) element
+    (if ellama-show-quotes
+	(format "[%s](%s):\n%s\n\n"
+		path path
+		(ellama--md-quote content))
+      (format "[%s](%s)" path path))))
+
+(cl-defmethod ellama-context-element-format
+  ((element ellama-context-element-file-quote) (mode (eql 'org-mode)))
+  "Format the context ELEMENT for the major MODE."
+  (ignore mode)
+  (with-slots (path content) element
+    (if ellama-show-quotes
+	(format "[[%s][%s]]:\n#+BEGIN_QUOTE\n%s\n#+END_QUOTE\n" path path content)
+      (format "[[%s][%s]]" path path))))
+
+
 ;;;###autoload
 (defun ellama-context-add-file ()
   "Add file to context."
@@ -952,6 +1038,28 @@ If EPHEMERAL non nil new session will not be associated with any file."
   (let* ((file-name (read-file-name "Select file: " nil nil t))
          (element (ellama-context-element-file :name file-name)))
     (ellama-context-element-add element)))
+
+(defun ellama-context-add-file-quote-noninteractive (path content)
+  "Add file with PATH quote CONTENT to context."
+  (let ((element (ellama-context-element-file-quote
+		  :path path :content content)))
+    (ellama-context-element-add element)))
+
+;;;###autoload
+(defun ellama-context-add-file-quote ()
+  "Add file quote to context interactively."
+  (interactive)
+  (let ((path (buffer-file-name (current-buffer)))
+	(content (if (region-active-p)
+		     (buffer-substring-no-properties
+		      (region-beginning)
+		      (region-end))
+		   (buffer-substring-no-properties
+		    (point-min)
+		    (point-max)))))
+    (if (not path)
+	(warn "should be called from buffer associated with file")
+      (ellama-context-add-file-quote-noninteractive path content))))
 
 ;;;###autoload
 (defun ellama-context-add-buffer (buf)
@@ -977,7 +1085,29 @@ If EPHEMERAL non nil new session will not be associated with any file."
   (let ((element (ellama-context-element-info-node :name node)))
     (ellama-context-element-add element)))
 
-(defun ellama-context-add-webpage-quote (name url content)
+(defun ellama-context-add-info-node-quote-noninteractive (name content)
+  "Add info node with NAME quote CONTENT to context."
+  (let ((element (ellama-context-element-info-node-quote
+		  :name name :content content)))
+    (ellama-context-element-add element)))
+
+;;;###autoload
+(defun ellama-context-add-info-node-quote ()
+  "Add info node quote to context interactively."
+  (interactive)
+  (let ((name (Info-copy-current-node-name))
+	(content (if (region-active-p)
+		     (buffer-substring-no-properties
+		      (region-beginning)
+		      (region-end))
+		   (buffer-substring-no-properties
+		    (point-min)
+		    (point-max)))))
+    (if (not name)
+	(warn "should be called from `info' buffer")
+      (ellama-context-add-info-node-quote-noninteractive name content))))
+
+(defun ellama-context-add-webpage-quote-noninteractive (name url content)
   "Add webpage with NAME and URL quote CONTENT to context."
   (let ((element (ellama-context-element-webpage-quote
 		  :name name :url url :content content)))
@@ -997,7 +1127,7 @@ If EPHEMERAL non nil new session will not be associated with any file."
 			(buffer-substring-no-properties
 			 (point-min)
 			 (point-max)))))
-	(ellama-context-add-webpage-quote name url content))
+	(ellama-context-add-webpage-quote-noninteractive name url content))
     (warn "Should be called from `eww'.")))
 
 (defun ellama--translate-string (s)
