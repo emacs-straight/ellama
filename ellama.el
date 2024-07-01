@@ -6,7 +6,7 @@
 ;; URL: http://github.com/s-kostyaev/ellama
 ;; Keywords: help local tools
 ;; Package-Requires: ((emacs "28.1") (llm "0.6.0") (spinner "1.7.4"))
-;; Version: 0.9.10
+;; Version: 0.10.2
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Created: 8th Oct 2023
 
@@ -391,6 +391,23 @@ Too low value can break generated code by splitting long comment lines."
       (replace-match "#+BEGIN_SRC\\1#+END_SRC"))
     (buffer-substring-no-properties (point-min) (point-max))))
 
+(defun ellama--replace-top-level-headings (text)
+  "Replace top level headings in TEXT if no source blocks."
+  ;; TODO: improve this code to replace all top level headings outside
+  ;; of code blocks. For example we can collect all begin_src
+  ;; positions, all end_src positions, sort it and safely replace all
+  ;; top level headings outside of this regions. If there is non-pair
+  ;; begin_src we should act like end_src at (point-max).
+  (with-temp-buffer
+    (insert text)
+    (goto-char (point-min))
+    (when (and (re-search-forward "^# " nil t)
+	       (not (re-search-backward "#\\+BEGIN_SRC" nil t)))
+      (goto-char (point-min))
+      (while (re-search-forward "^# " nil t)
+	(replace-match "* ")))
+    (buffer-substring-no-properties (point-min) (point-max))))
+
 (defun ellama--translate-markdown-to-org-filter (text)
   "Filter to translate code blocks from markdown syntax to org syntax in TEXT.
 This filter contains only subset of markdown syntax to be good enough."
@@ -421,7 +438,7 @@ This filter contains only subset of markdown syntax to be good enough."
     (replace-regexp-in-string "~~\\(.+?\\)~~" "+\\1+")
     (replace-regexp-in-string "<s>\\(.+?\\)</s>" "+\\1+")
     ;; headings
-    (replace-regexp-in-string "^# " "* ")
+    (ellama--replace-top-level-headings)
     (replace-regexp-in-string "^## " "** ")
     (replace-regexp-in-string "^### " "*** ")
     (replace-regexp-in-string "^#### " "**** ")
@@ -944,13 +961,18 @@ If EPHEMERAL non nil new session will not be associated with any file."
       (fill-region (point-min) (point-max) nil t t))
     (buffer-substring-no-properties (point-min) (point-max))))
 
+(defun ellama--org-quote (content)
+  "Return transformed CONTENT for org quotes."
+  (replace-regexp-in-string "^*" " *" content))
+
 (cl-defmethod ellama-context-element-format
   ((element ellama-context-element-webpage-quote) (mode (eql 'org-mode)))
   "Format the context ELEMENT for the major MODE."
   (ignore mode)
   (with-slots (name url content) element
     (if ellama-show-quotes
-	(format "[[%s][%s]]:\n#+BEGIN_QUOTE\n%s\n#+END_QUOTE\n" url name content)
+	(format "[[%s][%s]]:\n#+BEGIN_QUOTE\n%s\n#+END_QUOTE\n"
+		url name (ellama--org-quote content))
       (format "[[%s][%s]]" url name))))
 
 ;; Info node quote context elements
@@ -989,7 +1011,7 @@ If EPHEMERAL non nil new session will not be associated with any file."
 			 (not ellama--current-session))
 		    (ellama--translate-string name)
 		  name)
-		content)
+		(ellama--org-quote content))
       (format "[[%s][%s]]"
 	      (replace-regexp-in-string
 	       "(\\(.?*\\)) \\(.*\\)" "info:\\1#\\2" name)
@@ -1027,7 +1049,8 @@ If EPHEMERAL non nil new session will not be associated with any file."
   (ignore mode)
   (with-slots (path content) element
     (if ellama-show-quotes
-	(format "[[%s][%s]]:\n#+BEGIN_QUOTE\n%s\n#+END_QUOTE\n" path path content)
+	(format "[[%s][%s]]:\n#+BEGIN_QUOTE\n%s\n#+END_QUOTE\n"
+		path path (ellama--org-quote content))
       (format "[[%s][%s]]" path path))))
 
 
@@ -1187,8 +1210,8 @@ file by default.
 :on-error ON-ERROR -- ON-ERROR a function that's called with an error message on
 failure (with BUFFER current).
 
-:on-done ON-DONE -- ON-DONE a function that's called with the full response text
-when the request completes (with BUFFER current)."
+:on-done ON-DONE -- ON-DONE a function or list of functions that's called with
+ the full response text when the request completes (with BUFFER current)."
   (let* ((session (plist-get args :session))
 	 (provider (if session
 		       (ellama-session-provider session)
@@ -1261,7 +1284,10 @@ when the request completes (with BUFFER current)."
 				    (with-current-buffer buffer
 				      (accept-change-group ellama--change-group)
 				      (spinner-stop)
-				      (funcall donecb text)
+				      (if (listp donecb)
+					  (mapc (lambda (fn) (funcall fn text))
+						donecb)
+					(funcall donecb text))
 				      (setq ellama--current-request nil)
 				      (ellama-request-mode -1)))
 				  (lambda (_ msg)
@@ -1272,14 +1298,15 @@ when the request completes (with BUFFER current)."
 				      (setq ellama--current-request nil)
 				      (ellama-request-mode -1)))))))))
 
-(defun ellama-chain (initial-prompt forms)
+(defun ellama-chain (initial-prompt forms &optional acc)
   "Call chain of FORMS on INITIAL-PROMPT.
+ACC will collect responses in reverse order (previous answer will be on top).
 Each form is a plist that can contain different options:
 
 :provider PROVIDER - use PROVIDER instead of `ellama-provider'.
 
 :transform FUNCTION - use FUNCTION to transform result of previous step to new
-prompt.
+prompt.  FUCTION will be called with two arguments INITIAL-PROMPT and ACC.
 
 :session SESSION - use SESSION in current step.
 
@@ -1290,12 +1317,14 @@ last step only.
   (let* ((hd (car forms))
 	 (tl (cdr forms))
 	 (provider (or (plist-get hd :provider) ellama-provider))
-	 (transform (or (plist-get hd :transform) #'identity))
-	 (prompt (apply transform (list initial-prompt)))
+	 (transform (plist-get hd :transform))
+	 (prompt (if transform
+		     (apply transform (list initial-prompt acc))
+		   initial-prompt))
 	 (session (plist-get hd :session))
 	 (chat (plist-get hd :chat))
-	 (show (or (plist-get hd :show) ellama-always-show-chain-steps chat))
-	 (buf (if (or (and tl (not chat)) (not session))
+	 (show (or (plist-get hd :show) ellama-always-show-chain-steps))
+	 (buf (if (or (and (not chat)) (not session))
 		  (get-buffer-create (make-temp-name
 				      (ellama-generate-name provider real-this-command prompt)))
 		(ellama-get-session-buffer ellama--current-session-id))))
@@ -1304,7 +1333,13 @@ last step only.
     (with-current-buffer buf
       (funcall ellama-major-mode))
     (if chat
-	(ellama-chat prompt nil :provider provider)
+	(ellama-chat
+	 prompt
+	 nil
+	 :provider provider
+	 :on-done (lambda (res)
+		    (when tl
+		      (ellama-chain res tl (cons res acc)))))
       (ellama-stream
        prompt
        :provider provider
@@ -1314,18 +1349,75 @@ last step only.
 		 #'ellama--translate-markdown-to-org-filter)
        :on-done (lambda (res)
 		  (when tl
-		    (ellama-chain res tl)))))))
+		    (ellama-chain res tl (cons res acc))))))))
 
-(defun ellama-chat-done (text)
+;;;###autoload
+(defun ellama-solve-reasoning-problem (problem)
+  "Solve reasoning PROBLEM with absctraction of thought.
+Problem will be solved with the chain of questions to LLM."
+  (interactive "sProblem: ")
+  (ellama-chain
+   problem
+   '((:chat t
+	    :transform (lambda (problem _)
+			 (format "Problem:
+%s
+
+Let's think logically and provide abstract higher order plan how to solve this kind
+of problems. Don't dive into small details only provide high-level plan." problem)))
+     (:chat t
+	    :transform (lambda (_ _)
+			 "Provide more detailed plan. On what details should we pay attention?"))
+     (:chat t
+	    :transform (lambda (_ _)
+			 "Now revise the plan and provide the final solution."))
+     (:chat t
+	    :transform (lambda (_ _)
+			 "Provide short final answer based on final solution.")))))
+
+;;;###autoload
+(defun ellama-solve-domain-specific-problem (problem)
+  "Solve domain-specific PROBLEM with `ellama-chain'."
+  (interactive "sProblem: ")
+  (ellama-chain
+   problem
+   `((:transform (lambda (problem _)
+		   (format "Problem:
+%s
+
+Which specialist suits better for solving this kind of problems?"
+			   problem)))
+     (:transform (lambda (res _)
+		   (format "Message:
+%s
+
+Extract profession from this message. Be short and concise."
+			   res)))
+     (:chat t
+	    :transform (lambda (profession _)
+			 (format
+			  "You are professional %s. Do your best and create detailed plan how to solve this problem:
+%s"
+			  (string-trim profession) ,problem)))
+     (:chat t
+	    :transform (lambda (_ _)
+			 "Now revise the plan and provide the final solution."))
+     (:chat t
+	    :transform (lambda (_ _)
+			 "Provide short final answer based on final solution.")))))
+
+(defun ellama-chat-done (text &optional on-done)
   "Chat done.
-Will call `ellama-chat-done-callback' on TEXT."
+Will call `ellama-chat-done-callback' and ON-DONE on TEXT."
   (save-excursion
     (goto-char (point-max))
     (insert "\n\n")
     (when ellama-session-auto-save
       (save-buffer)))
   (when ellama-chat-done-callback
-    (funcall ellama-chat-done-callback text)))
+    (funcall ellama-chat-done-callback text))
+  (when on-done
+    (funcall on-done text)))
 
 (defun ellama--translate-generated-text-on-done (translation-buffer)
   "Translate generated text into TRANSLATION-BUFFER."
@@ -1393,7 +1485,10 @@ Will call `ellama-chat-done-callback' on TEXT."
 If CREATE-SESSION set, creates new session even if there is an active session.
 ARGS contains keys for fine control.
 
-:provider PROVIDER -- PROVIDER is an llm provider for generation."
+:provider PROVIDER -- PROVIDER is an llm provider for generation.
+
+:on-done ON-DONE -- ON-DONE a function that's called with
+the full response text when the request completes (with BUFFER current)."
   (interactive "sAsk ellama: ")
   (let* ((providers (append
                      `(("default model" . ellama-provider)
@@ -1401,10 +1496,13 @@ ARGS contains keys for fine control.
 			    '("ollama model" . (ellama-get-ollama-local-model))))
                      ellama-providers))
 	 (variants (mapcar #'car providers))
+	 (donecb (plist-get args :on-done))
 	 (provider (if current-prefix-arg
-		       (eval (alist-get
-			      (completing-read "Select model: " variants)
-			      providers nil nil #'string=))
+		       (progn
+			 (setq current-prefix-arg nil)
+			 (eval (alist-get
+				(completing-read "Select model: " variants)
+				providers nil nil #'string=)))
 		     (or (plist-get args :provider)
 			 ellama-provider)))
 	 (session (if (or create-session
@@ -1445,7 +1543,8 @@ ARGS contains keys for fine control.
 		  (ellama-get-nick-prefix-for-mode) " " ellama-assistant-nick ":\n")
 	  (ellama-stream prompt
 			 :session session
-			 :on-done #'ellama-chat-done
+			 :on-done (if donecb (list 'ellama-chat-done donecb)
+				    'ellama-chat-done)
 			 :filter (when (derived-mode-p 'org-mode)
 				   #'ellama--translate-markdown-to-org-filter)))))))
 
