@@ -6,7 +6,7 @@
 ;; URL: http://github.com/s-kostyaev/ellama
 ;; Keywords: help local tools
 ;; Package-Requires: ((emacs "28.1") (llm "0.6.0") (spinner "1.7.4"))
-;; Version: 0.11.0
+;; Version: 0.11.2
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Created: 8th Oct 2023
 
@@ -1117,6 +1117,11 @@ If EPHEMERAL non nil new session will not be associated with any file."
         (ellama-context-element-add element))
     (warn "No active region")))
 
+(defun ellama-context-add-text (text)
+  "Add TEXT to context."
+  (let ((element (ellama-context-element-text :content text)))
+    (ellama-context-element-add element)))
+
 ;;;###autoload
 (defun ellama-context-add-info-node (node)
   "Add info NODE to context."
@@ -1300,7 +1305,8 @@ failure (with BUFFER current).
 				    (with-current-buffer buffer
 				      (accept-change-group ellama--change-group)
 				      (spinner-stop)
-				      (if (listp donecb)
+				      (if (and (listp donecb)
+					       (functionp (car donecb)))
 					  (mapc (lambda (fn) (funcall fn text))
 						donecb)
 					(funcall donecb text))
