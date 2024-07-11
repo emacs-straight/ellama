@@ -5,8 +5,8 @@
 ;; Author: Sergey Kostyaev <sskostyaev@gmail.com>
 ;; URL: http://github.com/s-kostyaev/ellama
 ;; Keywords: help local tools
-;; Package-Requires: ((emacs "28.1") (llm "0.6.0") (spinner "1.7.4"))
-;; Version: 0.11.2
+;; Package-Requires: ((emacs "28.1") (llm "0.6.0") (spinner "1.7.4") (compat "29.1"))
+;; Version: 0.11.7
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Created: 8th Oct 2023
 
@@ -42,6 +42,8 @@
 (require 'info)
 (require 'shr)
 (require 'eww)
+(require 'vc)
+(require 'compat)
 (eval-when-compile (require 'rx))
 
 (defgroup ellama nil
@@ -246,23 +248,34 @@ PROMPT is a prompt string."
   :group 'ellama
   :type 'string)
 
-(defcustom ellama-code-edit-prompt-template "Regarding the following code, %s, only output the result code in format ```language\n...\n```:\n```\n%s\n```"
+(defcustom ellama-code-edit-prompt-template "Regarding the following code, %s, only output the result code in format ```language\n...\n```:\n```\n%s\n```\nWrite all the code in single code block."
   "Prompt template for `ellama-code-edit'."
   :group 'ellama
   :type 'string)
 
-(defcustom ellama-code-improve-prompt-template "Enhance the following code, only output the result code in format ```language\n...\n```:\n```\n%s\n```"
+(defcustom ellama-code-improve-prompt-template "Enhance the following code, only output the result code in format ```language\n...\n```:\n```\n%s\n```\nWrite all the code in single code block."
   "Prompt template for `ellama-code-improve'."
   :group 'ellama
   :type 'string)
 
-(defcustom ellama-code-complete-prompt-template "Continue the following code, only write new code in format ```language\n...\n```:\n```\n%s\n```"
+(defcustom ellama-code-complete-prompt-template "Continue the following code, only write new code in format ```language\n...\n```:\n```\n%s\n```\nWrite all the code in single code block."
   "Prompt template for `ellama-code-complete'."
   :group 'ellama
   :type 'string)
 
-(defcustom ellama-code-add-prompt-template "Context: \n```\n%s\n```\nBased on this context, %s, only output the result in format ```\n...\n```"
+(defcustom ellama-code-add-prompt-template "Context: \n```\n%s\n```\nBased on this context, %s, only output the result in format ```\n...\n```\nWrite all the code in single code block."
   "Prompt template for `ellama-code-add'."
+  :group 'ellama
+  :type 'string)
+
+(defcustom ellama-generate-commit-message-template "You are professional software developer.
+Write concise commit message based on diff. First line should
+contain short title described major change in functionality. Then
+one empty line. Then detailed description of all changes. Reply
+with commit message only. Diff:
+
+%s"
+  "Prompt template for `ellama-generate-commit-message'."
   :group 'ellama
   :type 'string)
 
@@ -282,12 +295,15 @@ PROMPT is a prompt string."
   :type 'string)
 
 (defcustom ellama-get-name-template "I will get you user query, you should return short topic only, what this conversation about. NEVER respond to query itself. Topic must be short and concise.
-For example:
+<example>
 Query: Why is sky blue?
 Topic: Blue sky
-
-Query: %s
-Topic:"
+</example>
+<query>
+%s
+</query>
+Topic:
+"
   "Prompt template for `ellama-get-name'."
   :group 'ellama
   :type 'string)
@@ -953,6 +969,15 @@ If EPHEMERAL non nil new session will not be associated with any file."
   "Extract the content of the context ELEMENT."
   (oref element content))
 
+(defun ellama--quote-buffer (quote)
+  "Return buffer name for QUOTE."
+  (let* ((buf-name (concat (make-temp-name "*ellama-quote-") "*"))
+	 (buf (get-buffer-create buf-name t)))
+    (with-current-buffer buf
+      (with-silent-modifications
+	(insert quote)))
+    buf-name))
+
 (cl-defmethod ellama-context-element-format
   ((element ellama-context-element-webpage-quote) (mode (eql 'markdown-mode)))
   "Format the context ELEMENT for the major MODE."
@@ -962,7 +987,9 @@ If EPHEMERAL non nil new session will not be associated with any file."
 	(format "[%s](%s):\n%s\n\n"
 		name url
 		(ellama--md-quote content))
-      (format "[%s](%s)" name url))))
+      (format
+       "[%s](%s):\n```emacs-lisp\n(display-buffer \"%s\")\n```\n"
+       name url (ellama--quote-buffer content)))))
 
 (defun ellama--md-quote (content)
   "Return quoted CONTENT for markdown."
@@ -989,7 +1016,8 @@ If EPHEMERAL non nil new session will not be associated with any file."
     (if ellama-show-quotes
 	(format "[[%s][%s]]:\n#+BEGIN_QUOTE\n%s\n#+END_QUOTE\n"
 		url name (ellama--org-quote content))
-      (format "[[%s][%s]]" url name))))
+      (format "[[%s][%s]] [[elisp:(display-buffer \"%s\")][show]]"
+	      url name (ellama--quote-buffer content)))))
 
 ;; Info node quote context elements
 
@@ -1012,7 +1040,7 @@ If EPHEMERAL non nil new session will not be associated with any file."
 	(format "```emacs-lisp\n(info \"%s\")\n```\n%s\n\n"
 		name
 		(ellama--md-quote content))
-      (format "```emacs-lisp\n(info \"%s\")\n```\n" name))))
+      (format "```emacs-lisp\n(info \"%s\")\n```\nshow:\n```emacs-lisp\n(display-buffer \"%s\")\n```\n" name (ellama--quote-buffer content)))))
 
 (cl-defmethod ellama-context-element-format
   ((element ellama-context-element-info-node-quote) (mode (eql 'org-mode)))
@@ -1028,13 +1056,14 @@ If EPHEMERAL non nil new session will not be associated with any file."
 		    (ellama--translate-string name)
 		  name)
 		(ellama--org-quote content))
-      (format "[[%s][%s]]"
+      (format "[[%s][%s]] [[elisp:(display-buffer \"%s\")][show]]"
 	      (replace-regexp-in-string
 	       "(\\(.?*\\)) \\(.*\\)" "info:\\1#\\2" name)
 	      (if (and ellama-chat-translation-enabled
 		       (not ellama--current-session))
 		  (ellama--translate-string name)
-		name)))))
+		name)
+	      (ellama--quote-buffer content)))))
 
 ;; File quote context elements
 
@@ -1057,7 +1086,8 @@ If EPHEMERAL non nil new session will not be associated with any file."
 	(format "[%s](%s):\n%s\n\n"
 		path path
 		(ellama--md-quote content))
-      (format "[%s](%s)" path path))))
+      (format "[%s](%s):\n```emacs-lisp\n(display-buffer \"%s\")"
+	      path path (ellama--quote-buffer content)))))
 
 (cl-defmethod ellama-context-element-format
   ((element ellama-context-element-file-quote) (mode (eql 'org-mode)))
@@ -1067,7 +1097,8 @@ If EPHEMERAL non nil new session will not be associated with any file."
     (if ellama-show-quotes
 	(format "[[%s][%s]]:\n#+BEGIN_QUOTE\n%s\n#+END_QUOTE\n"
 		path path (ellama--org-quote content))
-      (format "[[%s][%s]]" path path))))
+      (format "[[%s][%s]] [[elisp:(display-buffer \"%s\")][show]]"
+	      path path (ellama--quote-buffer content)))))
 
 
 ;;;###autoload
@@ -1209,6 +1240,11 @@ If EPHEMERAL non nil new session will not be associated with any file."
 	      prompt)
     prompt))
 
+(defun ellama-chat-buffer-p (buffer)
+  "Return non-nil if BUFFER is an ellama chat buffer."
+  (with-current-buffer buffer
+    (not (not ellama--current-session))))
+
 (defun ellama-stream (prompt &rest args)
   "Query ellama for PROMPT.
 ARGS contains keys for fine control.
@@ -1283,9 +1319,10 @@ failure (with BUFFER current).
 		    (goto-char pt))
 		  (when-let ((ellama-auto-scroll)
 			     (window (get-buffer-window buffer)))
-		    (with-selected-window window
-		      (goto-char (point-max))
-		      (recenter -1)))
+		    (when (ellama-chat-buffer-p buffer)
+		      (with-selected-window window
+			(goto-char (point-max))
+			(recenter -1))))
 		  (undo-amalgamate-change-group ellama--change-group)))))
 	(setq ellama--change-group (prepare-change-group))
 	(activate-change-group ellama--change-group)
@@ -1301,7 +1338,7 @@ failure (with BUFFER current).
 				  llm-prompt
 				  insert-text
 				  (lambda (text)
-				    (funcall insert-text text)
+				    (funcall insert-text (string-trim text))
 				    (with-current-buffer buffer
 				      (accept-change-group ellama--change-group)
 				      (spinner-stop)
@@ -1601,6 +1638,26 @@ the full response text when the request completes (with BUFFER current)."
 		(point)))
 	 (text (buffer-substring-no-properties beg end)))
     (ellama-stream text)))
+
+;;;###autoload
+(defun ellama-generate-commit-message ()
+  "Generate commit message based on diff."
+  (interactive)
+  (let* ((default-directory
+	  (if (string= ".git"
+		       (car (reverse
+			     (cl-remove
+			      ""
+			      (file-name-split default-directory)
+			      :test #'string=))))
+	      (file-name-parent-directory default-directory)
+	    default-directory))
+	 (diff (with-temp-buffer
+		 (vc-diff-internal
+		  nil (vc-deduce-fileset t) nil nil nil (current-buffer))
+		 (buffer-substring-no-properties (point-min) (point-max)))))
+    (ellama-stream
+     (format ellama-generate-commit-message-template diff))))
 
 ;;;###autoload
 (defun ellama-ask-line ()

@@ -1,9 +1,8 @@
-;;; test-ellama.el --- Ellama tests -*- lexical-binding: t -*-
+;;; test-ellama.el --- Ellama tests -*- lexical-binding: t; package-lint-main-file: "../ellama.el"; -*-
 
 ;; Copyright (C) 2023  Free Software Foundation, Inc.
 
 ;; Author: Sergey Kostyaev <sskostyaev@gmail.com>
-;; Package-Requires: ((emacs "28.1") (llm "0.6.0") (spinner "1.7.4"))
 
 ;; This file is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -89,7 +88,7 @@
 (ert-deftest test-ellama-context-element-format-webpage-quote-disabled-markdown ()
   (let ((element (ellama-context-element-webpage-quote :name "test name" :url "https://example.com/" :content "1\n\n2"))
 	(ellama-show-quotes nil))
-    (should (equal "[test name](https://example.com/)" (ellama-context-element-format element 'markdown-mode)))))
+    (should (string-match "\\[test name\\](https://example.com/):\n```emacs-lisp\n(display-buffer \"\\*ellama-quote-.+\\*\")\n```\n" (ellama-context-element-format element 'markdown-mode)))))
 
 (ert-deftest test-ellama-context-element-format-webpage-quote-enabled-markdown ()
   (let ((element (ellama-context-element-webpage-quote :name "test name" :url "https://example.com/" :content "1\n\n2"))
@@ -105,7 +104,7 @@
 (ert-deftest test-ellama-context-element-format-webpage-quote-disabled-org-mode ()
   (let ((element (ellama-context-element-webpage-quote :name "test name" :url "https://example.com/" :content "1\n\n2"))
 	(ellama-show-quotes nil))
-    (should (equal "[[https://example.com/][test name]]" (ellama-context-element-format element 'org-mode)))))
+    (should (string-match "\\[\\[https://example.com/\\]\\[test name\\]\\] \\[\\[elisp:(display-buffer \"\\*ellama-quote-.+\\*\")\\]\\[show\\]\\]" (ellama-context-element-format element 'org-mode)))))
 
 (ert-deftest test-ellama-context-element-format-webpage-quote-enabled-org-mode ()
   (let ((element (ellama-context-element-webpage-quote :name "test name" :url "https://example.com/" :content "1\n\n* 2"))
@@ -122,7 +121,7 @@
 (ert-deftest test-ellama-context-element-format-info-node-quote-disabled-markdown ()
   (let ((element (ellama-context-element-info-node-quote :name "(emacs)Top" :content "1\n\n2"))
 	(ellama-show-quotes nil))
-    (should (equal "```emacs-lisp\n(info \"(emacs)Top\")\n```\n" (ellama-context-element-format element 'markdown-mode)))))
+    (should (string-match "```emacs-lisp\n(info \"(emacs)Top\")\n```\nshow:\n```emacs-lisp\n(display-buffer \"\\*ellama-quote-.+\\*\")\n```\n" (ellama-context-element-format element 'markdown-mode)))))
 
 (ert-deftest test-ellama-context-element-format-info-node-quote-enabled-markdown ()
   (let ((element (ellama-context-element-info-node-quote :name "(emacs)Top" :content "1\n\n2"))
@@ -133,7 +132,7 @@
 (ert-deftest test-ellama-context-element-format-info-node-quote-disabled-org-mode ()
   (let ((element (ellama-context-element-info-node-quote :name "(emacs)Top" :content "1\n\n2"))
 	(ellama-show-quotes nil))
-    (should (equal "[[(emacs)Top][(emacs)Top]]" (ellama-context-element-format element 'org-mode)))))
+    (should (string-match "\\[\\[(emacs)Top\\]\\[(emacs)Top\\]\\] \\[\\[elisp:(display-buffer \"\\*ellama-quote-.+\\*\")\\]\\[show\\]\\]" (ellama-context-element-format element 'org-mode)))))
 
 (ert-deftest test-ellama-context-element-format-info-node-quote-enabled-org-mode ()
   (let ((element (ellama-context-element-info-node-quote :name "(emacs)Top" :content "1\n\n* 2"))
@@ -144,7 +143,7 @@
 (ert-deftest test-ellama-context-element-format-file-quote-disabled-markdown ()
   (let ((element (ellama-context-element-file-quote :path "/tmp/test.txt" :content "1\n\n2"))
 	(ellama-show-quotes nil))
-    (should (equal "[/tmp/test.txt](/tmp/test.txt)" (ellama-context-element-format element 'markdown-mode)))))
+    (should (string-match "\\[/tmp/test.txt\\](/tmp/test.txt):\n```emacs-lisp\n(display-buffer \"\\*ellama-quote-.+\\*\")" (ellama-context-element-format element 'markdown-mode)))))
 
 (ert-deftest test-ellama-context-element-format-file-quote-enabled-markdown ()
   (let ((element (ellama-context-element-file-quote :path "/tmp/test.txt" :content "1\n\n2"))
@@ -160,7 +159,7 @@
 (ert-deftest test-ellama-context-element-format-file-quote-disabled-org-mode ()
   (let ((element (ellama-context-element-file-quote :path "/tmp/test.txt" :content "1\n\n2"))
 	(ellama-show-quotes nil))
-    (should (equal "[[/tmp/test.txt][/tmp/test.txt]]" (ellama-context-element-format element 'org-mode)))))
+    (should (string-match "\\[\\[/tmp/test.txt\\]\\[/tmp/test.txt\\]\\] \\[\\[elisp:(display-buffer \"\\*ellama-quote-.+\\*\")\\]\\[show\\]\\]" (ellama-context-element-format element 'org-mode)))))
 
 (ert-deftest test-ellama-context-element-format-file-quote-enabled-org-mode ()
   (let ((element (ellama-context-element-file-quote :path "/tmp/test.txt" :content "1\n\n* 2"))
