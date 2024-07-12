@@ -6,7 +6,7 @@
 ;; URL: http://github.com/s-kostyaev/ellama
 ;; Keywords: help local tools
 ;; Package-Requires: ((emacs "28.1") (llm "0.6.0") (spinner "1.7.4") (compat "29.1"))
-;; Version: 0.11.7
+;; Version: 0.11.9
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Created: 8th Oct 2023
 
@@ -111,6 +111,7 @@
     (define-key map (kbd "c e") 'ellama-code-edit)
     (define-key map (kbd "c i") 'ellama-code-improve)
     (define-key map (kbd "c r") 'ellama-code-review)
+    (define-key map (kbd "c m") 'ellama-generate-commit-message)
     ;; summarize
     (define-key map (kbd "s s") 'ellama-summarize)
     (define-key map (kbd "s w") 'ellama-summarize-webpage)
@@ -172,7 +173,7 @@
 	   (ellama-setup-keymap)))
   :group 'ellama)
 
-(defcustom ellama-ollama-binary (executable-find "ollama")
+(defcustom ellama-ollama-binary "ollama"
   "Path to ollama binary."
   :type 'string
   :group 'ellama)
@@ -1549,9 +1550,11 @@ ARGS contains keys for fine control.
 :on-done ON-DONE -- ON-DONE a function that's called with
 the full response text when the request completes (with BUFFER current)."
   (interactive "sAsk ellama: ")
-  (let* ((providers (append
+  (let* ((ollama-binary (executable-find ellama-ollama-binary))
+	 (providers (append
                      `(("default model" . ellama-provider)
-		       ,(if (and ellama-ollama-binary (file-exists-p ellama-ollama-binary))
+		       ,(if (and ollama-binary
+				 (file-exists-p ollama-binary))
 			    '("ollama model" . (ellama-get-ollama-local-model))))
                      ellama-providers))
 	 (variants (mapcar #'car providers))
@@ -1643,21 +1646,22 @@ the full response text when the request completes (with BUFFER current)."
 (defun ellama-generate-commit-message ()
   "Generate commit message based on diff."
   (interactive)
-  (let* ((default-directory
-	  (if (string= ".git"
-		       (car (reverse
-			     (cl-remove
-			      ""
-			      (file-name-split default-directory)
-			      :test #'string=))))
-	      (file-name-parent-directory default-directory)
-	    default-directory))
-	 (diff (with-temp-buffer
-		 (vc-diff-internal
-		  nil (vc-deduce-fileset t) nil nil nil (current-buffer))
-		 (buffer-substring-no-properties (point-min) (point-max)))))
-    (ellama-stream
-     (format ellama-generate-commit-message-template diff))))
+  (save-window-excursion
+    (let* ((default-directory
+	    (if (string= ".git"
+			 (car (reverse
+			       (cl-remove
+				""
+				(file-name-split default-directory)
+				:test #'string=))))
+		(file-name-parent-directory default-directory)
+	      default-directory))
+	   (diff (with-temp-buffer
+		   (vc-diff-internal
+		    nil (vc-deduce-fileset t) nil nil nil (current-buffer))
+		   (buffer-substring-no-properties (point-min) (point-max)))))
+      (ellama-stream
+       (format ellama-generate-commit-message-template diff)))))
 
 ;;;###autoload
 (defun ellama-ask-line ()
@@ -1926,7 +1930,9 @@ otherwise prompt user for URL to summarize."
 			  (mapcar (lambda (s)
 				    (car (split-string s)))
 				  (seq-drop
-				   (process-lines ellama-ollama-binary "ls") 1))))
+				   (process-lines
+				    (executable-find ellama-ollama-binary) "ls")
+				   1))))
 	(host (when (llm-ollama-p ellama-provider)
 		(llm-ollama-host ellama-provider)))
 	(port (when (llm-ollama-p ellama-provider)
@@ -1941,12 +1947,14 @@ otherwise prompt user for URL to summarize."
 (defun ellama-provider-select ()
   "Select ellama provider."
   (interactive)
-  (let* ((providers (append
+  (let* ((ollama-binary (executable-find ellama-ollama-binary))
+	 (providers (append
                      `(("default model" . ellama-provider)
-		               ,(if (and ellama-ollama-binary (file-exists-p ellama-ollama-binary))
-			                '("ollama model" . (ellama-get-ollama-local-model))))
+		       ,(if (and ollama-binary
+				 (file-exists-p ollama-binary))
+			    '("ollama model" . (ellama-get-ollama-local-model))))
                      ellama-providers))
-	     (variants (mapcar #'car providers)))
+	 (variants (mapcar #'car providers)))
     (setq ellama-provider
 	  (eval (alist-get
 		 (completing-read "Select model: " variants)
