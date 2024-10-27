@@ -6,7 +6,7 @@
 ;; URL: http://github.com/s-kostyaev/ellama
 ;; Keywords: help local tools
 ;; Package-Requires: ((emacs "28.1") (llm "0.6.0") (spinner "1.7.4") (transient "0.7.6") (compat "29.1"))
-;; Version: 0.12.2
+;; Version: 0.12.4
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Created: 8th Oct 2023
 
@@ -89,6 +89,11 @@
 
 (defcustom ellama-translation-provider nil
   "LLM provider for chat translation."
+  :group 'ellama
+  :type '(sexp :validate 'llm-standard-provider-p))
+
+(defcustom ellama-summarization-provider nil
+  "LLM provider for summarization."
   :group 'ellama
   :type '(sexp :validate 'llm-standard-provider-p))
 
@@ -222,7 +227,20 @@ PROMPT is a prompt string."
   :group 'ellama
   :type 'string)
 
-(defcustom ellama-summarize-prompt-template "Text:\n%s\nSummarize it."
+(defcustom ellama-summarize-prompt-template "<INSTRUCTIONS>
+You are a summarizer. You write a summary of the input **IN THE SAME LANGUAGE AS ORIGINAL INPUT TEXT** using following steps:
+1.) Analyze the input text and generate 5 essential questions that, when answered, capture the main points and core meaning of the text.
+2.) When formulating your questions:
+ a. Address the central theme or argument
+ b. Identify key supporting ideas
+ c. Highlight important facts or evidence
+ d. Reveal the author's purpose or perspective
+ e. Explore any significant implications or conclusions.
+3.) Answer all of your generated questions one-by-one in detail.
+</INSTRUCTIONS>
+<INPUT>
+%s
+</INPUT>"
   "Prompt template for `ellama-summarize'."
   :group 'ellama
   :type 'string)
@@ -272,13 +290,26 @@ PROMPT is a prompt string."
   :group 'ellama
   :type 'string)
 
-(defcustom ellama-generate-commit-message-template "You are professional software developer.
-Write concise commit message based on diff. First line should
-contain short title described major change in functionality. Then
-one empty line. Then detailed description of all changes. Reply
-with commit message only. Diff:
+(defcustom ellama-generate-commit-message-template "<INSTRUCTIONS>
+You are professional software developer.
 
-%s"
+Write concise commit message based on diff in the following format:
+<FORMAT>
+First line should contain short title described major change in functionality.
+Then one empty line. Then detailed description of all changes.
+</FORMAT>
+<EXAMPLE>
+Improve abc
+
+Improved abc feature by adding new xyz module.
+</EXAMPLE>
+
+**Reply with commit message only without any quotes.**
+</INSTRUCTIONS>
+
+<DIFF>
+%s
+</DIFF>"
   "Prompt template for `ellama-generate-commit-message'."
   :group 'ellama
   :type 'string)
@@ -312,11 +343,18 @@ Topic:
   :group 'ellama
   :type 'string)
 
-(defcustom ellama-translation-template "Translate this text to %s.
-Original text:
+(defcustom ellama-translation-template "<INSTRUCTIONS>
+You are expert text translator. Translate input text to %s. Do
+not explain what you are doing. Do not self reference. You are an
+expert translator that will be tasked with translating and
+improving the spelling/grammar/literary quality of a piece of
+text. Please rewrite the translated text in your tone of voice
+and writing style. Ensure that the meaning of the original text
+is not changed.
+</INSTRUCTIONS>
+<INPUT>
 %s
-Translation to %s:
-"
+</INPUT>"
   "Translation template."
   :group 'ellama
   :type 'string)
@@ -1808,7 +1846,8 @@ ARGS contains keys for fine control.
   (let ((text (if (region-active-p)
 		  (buffer-substring-no-properties (region-beginning) (region-end))
 		(buffer-substring-no-properties (point-min) (point-max)))))
-    (ellama-instant (format ellama-summarize-prompt-template text))))
+    (ellama-instant (format ellama-summarize-prompt-template text)
+		    :provider (or ellama-summarization-provider ellama-provider))))
 
 ;;;###autoload
 (defun ellama-summarize-killring ()
@@ -1817,7 +1856,8 @@ ARGS contains keys for fine control.
   (let ((text (current-kill 0)))
     (if (string-empty-p text)
         (message "No text in the kill ring to summarize.")
-      (ellama-instant (format ellama-summarize-prompt-template text)))))
+      (ellama-instant (format ellama-summarize-prompt-template text)
+		      :provider (or ellama-summarization-provider ellama-provider)))))
 
 ;;;###autoload
 (defun ellama-code-review ()
