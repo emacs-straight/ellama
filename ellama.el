@@ -6,7 +6,7 @@
 ;; URL: http://github.com/s-kostyaev/ellama
 ;; Keywords: help local tools
 ;; Package-Requires: ((emacs "28.1") (llm "0.6.0") (spinner "1.7.4") (transient "0.7") (compat "29.1"))
-;; Version: 0.12.6
+;; Version: 0.12.7
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Created: 8th Oct 2023
 
@@ -2169,7 +2169,8 @@ otherwise prompt user for URL to summarize."
     ("i" "Improve Commands" ellama-transient-improve-menu)
     ("t" "Translate Commands" ellama-transient-translate-menu)
     ("m" "Make Commands" ellama-transient-make-menu)
-    ("k" "Text Complete" ellama-complete)]]
+    ("k" "Text Complete" ellama-complete)
+    ("g" "Text change" ellama-change)]]
   [["System"
     ("S" "Session Commands" ellama-transient-session-menu)
     ("x" "Context Commands" ellama-transient-context-menu)
