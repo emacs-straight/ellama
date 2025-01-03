@@ -1,12 +1,12 @@
 ;;; ellama.el --- Tool for interacting with LLMs -*- lexical-binding: t -*-
 
-;; Copyright (C) 2023, 2024  Free Software Foundation, Inc.
+;; Copyright (C) 2023-2025  Free Software Foundation, Inc.
 
 ;; Author: Sergey Kostyaev <sskostyaev@gmail.com>
 ;; URL: http://github.com/s-kostyaev/ellama
 ;; Keywords: help local tools
 ;; Package-Requires: ((emacs "28.1") (llm "0.6.0") (spinner "1.7.4") (transient "0.7") (compat "29.1"))
-;; Version: 0.13.0
+;; Version: 0.13.1
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Created: 8th Oct 2023
 
@@ -581,8 +581,10 @@ FILE is a path to file contains string representation of this session, string.
 
 PROMPT is a variable contains last prompt in this session.
 
-CONTEXT contains context for next request."
-  id provider file prompt context)
+CONTEXT contains context for next request.
+
+EXTRA contains additional information."
+  id provider file prompt context extra)
 
 (defun ellama-get-session-buffer (id)
   "Return ellama session buffer by provided ID."
@@ -799,14 +801,20 @@ If EPHEMERAL non nil new session will not be associated with any file."
 	(goto-char (point-max))
 	(insert (ellama-get-nick-prefix-for-mode) " " ellama-user-nick ":\n")
 	(save-buffer))
-      (let ((session (read session-buffer)))
+      (let* ((session (read session-buffer))
+	     ;; workaround for old sessions
+	     (offset (cl-struct-slot-offset 'ellama-session 'extra))
+	     (extra (when (> (length session)
+			     offset)
+		      (aref session offset))))
 	(setq ellama--current-session
 	      (make-ellama-session
 	       :id (ellama-session-id session)
 	       :provider (ellama-session-provider session)
 	       :file (ellama-session-file session)
 	       :prompt (ellama-session-prompt session)
-	       :context ellama--new-session-context)))
+	       :context ellama--new-session-context
+	       :extra extra)))
       (setq ellama--new-session-context nil)
       (setq ellama--current-session-id (ellama-session-id ellama--current-session))
       (puthash (ellama-session-id ellama--current-session)
