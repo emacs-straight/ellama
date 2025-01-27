@@ -5,8 +5,8 @@
 ;; Author: Sergey Kostyaev <sskostyaev@gmail.com>
 ;; URL: http://github.com/s-kostyaev/ellama
 ;; Keywords: help local tools
-;; Package-Requires: ((emacs "28.1") (llm "0.6.0") (spinner "1.7.4") (transient "0.7") (compat "29.1"))
-;; Version: 0.13.2
+;; Package-Requires: ((emacs "28.1") (llm "0.22.0") (spinner "1.7.4") (transient "0.7") (compat "29.1"))
+;; Version: 0.13.4
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Created: 8th Oct 2023
 
@@ -359,6 +359,19 @@ is not changed.
   :group 'ellama
   :type 'string)
 
+(defcustom ellama-extract-string-list-template "You are professional data extractor. Extract %s as json array of strings
+<EXAMPLE>
+{\"data\":[\"First element\", \"Second element\"]}
+</EXAMPLE>"
+  "Extract string list template."
+  :group 'ellama
+  :type 'string)
+
+(defcustom ellama-extraction-provider nil
+  "LLM provider for data extraction."
+  :group 'ellama
+  :type '(sexp :validate 'llm-standard-provider-p))
+
 (defcustom ellama-chat-done-callback nil
   "Callback that will be called on ellama chat response generation done.
 It should be a function with single argument generated text string."
@@ -510,56 +523,41 @@ Too low value can break generated code by splitting long comment lines."
     (fill-region beg end nil t t)))
 
 (defun ellama--replace-outside-of-code-blocks (text)
-  "Replace some markdown elements to org in TEXT outside of code blocks."
+  "Replace markdown elements in TEXT with org equivalents.
+Skip code blocks and math environments."
   (with-temp-buffer
     (insert (propertize text 'hard t))
     (goto-char (point-min))
-    ;; apply transformations outside of code blocks
-    (let ((beg (point-min))
-	  (end (or (re-search-forward "#\\+BEGIN_SRC" nil t)
-		   (point-max)))
-	  (quit nil))
-      (goto-char beg)
-      (setq end (or (progn
-		      (re-search-forward "\\$\\$.+\\$\\$" end t)
-		      (match-beginning 0))
-		    (progn
-		      (re-search-forward "\\$.+\\$" end t)
-		      (match-beginning 0))
-		    end))
-      (goto-char beg)
-      (ellama--apply-transformations beg end)
-      (goto-char beg)
-      (when-let ((points (cl-remove-if
-			  #'not
-			  (list (progn (goto-char beg)
-				       (re-search-forward "#\\+BEGIN_SRC" nil t))
-				(progn (goto-char beg)
-				       (re-search-forward "\\$\\$.+\\$\\$" nil t))
-				(progn (goto-char beg)
-				       (re-search-forward "\\$.+\\$" nil t)))))
-		 (new-beg (cl-reduce #'min points)))
-	(goto-char new-beg))
-      (when (equal end (point-max))
-	(setq quit t))
-      (while (when-let* ((continue (not quit))
-			 (beg (point))
-			 (points (cl-remove-if
-				  #'not
-				  (list (progn (goto-char beg)
-					       (re-search-forward "#\\+BEGIN_SRC" nil t))
-					(progn (goto-char beg)
-					       (re-search-forward "\\$\\$.+\\$\\$" nil t))
-					(progn (goto-char beg)
-					       (re-search-forward "\\$.+\\$" nil t))
-					(point-max))))
-			 (end (cl-reduce #'min points)))
-	       (goto-char beg)
-	       (when (equal end (point-max))
-		 (setq quit t))
-	       (ellama--apply-transformations beg end)
-	       (goto-char end))))
-    (buffer-substring-no-properties (point-min) (point-max))))
+    (let (block-start
+	  block-end
+	  (prev-point (point-min)))
+      ;; Process regions outside of blocks
+      (while (re-search-forward "\\(#\\+BEGIN_SRC\\|\\$\\$\\|\\$\\)" nil t)
+        (setq block-start (match-beginning 0))
+	(goto-char block-start)
+        (let ((block-type (cond ((looking-at "#\\+BEGIN_SRC") 'src)
+                                ((looking-at "\\$\\$") 'math-display)
+                                ((looking-at "\\$") 'math-inline))))
+          ;; Apply transformations to text before the block
+          (ellama--apply-transformations prev-point block-start)
+          ;; Skip over the block content
+          (goto-char block-start)
+          (setq block-end
+		(cond
+		 ((eq block-type 'src)
+                  (if (re-search-forward "#\\+END_SRC" nil t) (point) (point-max)))
+		 ((eq block-type 'math-display)
+                  (if (re-search-forward "\\$\\$.+\\$\\$" nil t) (point) (point-max)))
+		 ((eq block-type 'math-inline)
+                  (if (re-search-forward "\\$.+\\$" nil t) (point) (point-max)))))
+          (when block-end
+	    (goto-char block-end))
+	  (setq prev-point (point))))
+      ;; Process any remaining text after the last block
+      (ellama--apply-transformations prev-point (point-max)))
+    (prog1
+	(buffer-substring-no-properties (point-min) (point-max))
+      (kill-buffer))))
 
 (defun ellama--translate-markdown-to-org-filter (text)
   "Filter to translate code blocks from markdown syntax to org syntax in TEXT.
@@ -1933,13 +1931,17 @@ the full response text when the request completes (with BUFFER current)."
 
 ARGS contains keys for fine control.
 
-:provider PROVIDER -- PROVIDER is an llm provider for generation."
+:provider PROVIDER -- PROVIDER is an llm provider for generation.
+
+:on-done ON-DONE -- ON-DONE a function or list of functions that's called with
+ the full response text when the request completes (with BUFFER current)."
   (let* ((provider (or (plist-get args :provider)
 		       ellama-provider))
 	 (buffer-name (ellama-generate-name provider real-this-command prompt))
 	 (buffer (get-buffer-create (if (get-buffer buffer-name)
 					(make-temp-name (concat buffer-name " "))
 				      buffer-name)))
+	 (donecb (plist-get args :on-done))
 	 filter)
     (with-current-buffer buffer
       (funcall ellama-major-mode)
@@ -1950,7 +1952,8 @@ ARGS contains keys for fine control.
     (ellama-stream prompt
 		   :buffer buffer
 		   :filter filter
-		   :provider provider)))
+		   :provider provider
+		   :on-done donecb)))
 
 ;;;###autoload
 (defun ellama-translate ()
@@ -2193,6 +2196,52 @@ otherwise prompt user for URL to summarize."
       (beginning-of-line)
       (kill-region (point) (point-max))
       (ellama-summarize))))
+
+(defun ellama--make-extract-string-list-prompt (elements input)
+  "Create LLM prompt for list of ELEMENTS extraction from INPUT."
+  (llm-make-chat-prompt
+   input
+   :context (format ellama-extract-string-list-template elements)
+   :response-format '(:type object :properties
+			    (:data (:type array :items (:type string)))
+			    :required (data))))
+
+(defun ellama-extract-string-list (elements input &rest args)
+  "Extract list of ELEMENTS from INPUT syncronously.
+Return list of strings.  ARGS contains keys for fine control.
+
+:provider PROVIDER -- PROVIDER is an llm provider for generation."
+  (let ((provider (or (plist-get args :provider)
+		      ellama-extraction-provider
+		      ellama-provider)))
+    (plist-get (json-parse-string
+		(llm-chat
+		 provider
+		 (ellama--make-extract-string-list-prompt elements input))
+		:object-type 'plist
+		:array-type 'list)
+	       :data)))
+
+(defun ellama-extract-string-list-async (elements callback input &rest args)
+  "Extract list of ELEMENTS from INPUT asyncronously.
+Call CALLBACK on result list of strings.  ARGS contains keys for fine control.
+
+:provider PROVIDER -- PROVIDER is an llm provider for generation."
+  (let ((provider (or (plist-get args :provider)
+		      ellama-extraction-provider
+		      ellama-provider)))
+    (llm-chat-async
+     provider
+     (ellama--make-extract-string-list-prompt elements input)
+     (lambda (res)
+       (funcall callback
+		(plist-get (json-parse-string
+			    res
+			    :object-type 'plist
+			    :array-type 'list)
+			   :data)))
+     (lambda (err)
+       (user-error err)))))
 
 (defun ellama-get-ollama-local-model ()
   "Return llm provider for interactively selected ollama model."
