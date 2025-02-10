@@ -1,3 +1,25 @@
+* Version 0.13.11
+- Add function ~ellama-make-semantic-similar-p-with-context~ that
+  return test function for checking if two provided texts are meaning
+  the same in provided context. It can be useful for creating
+  semantically uniq lists of strings.
+* Version 0.13.10
+- Refactor file name fixing logic. Change the regular expression for
+  handling forbidden filename characters to improve efficiency.
+* Version 0.13.9
+- Fix adding buffer to context.
+* Version 0.13.8
+- Fixed file name generation for all operating systems.
+- Fix disable paragraphs filling.
+- Add ~ellama-define-word~ command to transient menu.
+- Add ~ellama-generate-name-by-reasoning-llm~ funtion to use
+r1 distilled models for naming new sessions.
+* Version 0.13.7
+- Add missing requires for integration tests.
+* Version 0.13.6
+- Add function ~ellama-semantic-similar-p~. It can be useful for
+  creating lists without duplicates by meaning.
+- Add integration tests.
 * Version 0.13.5
 - Fix defcustom validation. Remove unnecessary quote.
 * Version 0.13.4

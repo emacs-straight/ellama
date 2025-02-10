@@ -1,6 +1,6 @@
 ;;; test-ellama.el --- Ellama tests -*- lexical-binding: t; package-lint-main-file: "../ellama.el"; -*-
 
-;; Copyright (C) 2023  Free Software Foundation, Inc.
+;; Copyright (C) 2023-2025  Free Software Foundation, Inc.
 
 ;; Author: Sergey Kostyaev <sskostyaev@gmail.com>
 
@@ -387,6 +387,11 @@ student_english_score = 78
 average_score = calculate_average_score(student_math_score, student_science_score, student_english_score)
 print(f\"The average score of {student_name} in {class_name} is: {average_score:.2f}\")
 #+END_SRC\n\nIn this example:\n- Variable names like ~student/name~, ~class/name~, and ~grade/level~ use snake/case.\n- The function name ~calculate/average/score~ also follows the snake_case convention.\n\nSnake case helps improve readability, especially in languages that are sensitive to capitalization\nlike Python."))))
+
+(ert-deftest test-ellama--fix-file-name ()
+  (should (string=
+	   (ellama--fix-file-name "a/\\?%*:|\"<>.;=")
+	   "a_____________")))
 
 (provide 'test-ellama)
 
