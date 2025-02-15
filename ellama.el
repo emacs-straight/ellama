@@ -6,7 +6,7 @@
 ;; URL: http://github.com/s-kostyaev/ellama
 ;; Keywords: help local tools
 ;; Package-Requires: ((emacs "28.1") (llm "0.22.0") (spinner "1.7.4") (transient "0.7") (compat "29.1") (posframe "1.4.0"))
-;; Version: 1.0.3
+;; Version: 1.1.3
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Created: 8th Oct 2023
 
@@ -77,6 +77,23 @@
   "Backend LLM provider."
   :group 'ellama
   :type '(sexp :validate llm-standard-provider-p))
+
+(defcustom ellama-session-remove-reasoning t
+  "Remove internal reasoning from the session after ellama provide an answer.
+This can improve long-term communication with reasoning models."
+  :group 'ellama
+  :type 'boolean)
+
+(defcustom ellama-output-remove-reasoning t
+  "Remove internal reasoning from ellama output.
+Make reasoning models more useful for many cases."
+  :group 'ellama
+  :type 'boolean)
+
+(defcustom ellama-session-hide-org-quotes t
+  "Hide org quotes in ellama session buffer."
+  :group 'ellama
+  :type 'boolean)
 
 (defcustom ellama-chat-translation-enabled nil
   "Enable chat translations."
@@ -233,15 +250,10 @@ PROMPT is a prompt string."
   :type 'string)
 
 (defcustom ellama-summarize-prompt-template "<INSTRUCTIONS>
-You are a summarizer. You write a summary of the input **IN THE SAME LANGUAGE AS ORIGINAL INPUT TEXT** using following steps:
-1.) Analyze the input text and generate 5 essential questions that, when answered, capture the main points and core meaning of the text.
-2.) When formulating your questions:
- a. Address the central theme or argument
- b. Identify key supporting ideas
- c. Highlight important facts or evidence
- d. Reveal the author's purpose or perspective
- e. Explore any significant implications or conclusions.
-3.) Answer all of your generated questions one-by-one in detail.
+You are a summarizer. You write a summary of the input **IN THE SAME
+LANGUAGE AS ORIGINAL INPUT TEXT**. Summarize input text concisely and
+comprehensively, ensuring all key details are included accurately.
+Focus on clarity and maintain a straightforward presentation.
 </INSTRUCTIONS>
 <INPUT>
 %s
@@ -628,6 +640,8 @@ This filter contains only subset of markdown syntax to be good enough."
     (replace-regexp-in-string "^[[:space:]]*```$" "#+END_SRC")
     (replace-regexp-in-string "^[[:space:]]*```" "#+END_SRC\n")
     (replace-regexp-in-string "```" "\n#+END_SRC\n")
+    (replace-regexp-in-string "<think>[\n]?" "#+BEGIN_QUOTE\n")
+    (replace-regexp-in-string "</think>[\n]?" "#+END_QUOTE\n")
     (ellama--replace-bad-code-blocks)
     (ellama--replace-outside-of-code-blocks)))
 
@@ -941,6 +955,7 @@ If EPHEMERAL non nil new session will not be associated with any file."
 	       buffer ellama--active-sessions)
       (ellama-session-mode +1))
     (kill-buffer session-buffer)
+    (ellama-hide-quotes)
     (display-buffer buffer (when ellama-chat-display-action-function
 			     `((ignore . (,ellama-chat-display-action-function)))))))
 
@@ -1027,6 +1042,9 @@ If EPHEMERAL non nil new session will not be associated with any file."
   (setq ellama--global-context nil)
   (with-current-buffer ellama--context-buffer
     (erase-buffer))
+  (when ellama--current-session-id
+    (with-current-buffer (ellama-get-session-buffer ellama--current-session-id)
+      (setf (ellama-session-context ellama--current-session) nil)))
   (posframe-hide ellama--context-buffer))
 
 ;; Context elements
@@ -1066,8 +1084,8 @@ If EPHEMERAL non nil new session will not be associated with any file."
   (if-let* ((id ellama--current-session-id)
 	    (session (with-current-buffer (ellama-get-session-buffer id)
 		       ellama--current-session)))
-      (push element (ellama-session-context session)))
-  (push element ellama--global-context)
+      (cl-pushnew element (ellama-session-context session) :test #'equal-including-properties))
+  (cl-pushnew element ellama--global-context :test #'equal-including-properties)
   (get-buffer-create ellama--context-buffer t)
   (with-current-buffer ellama--context-buffer
     (erase-buffer)
@@ -1097,7 +1115,11 @@ If EPHEMERAL non nil new session will not be associated with any file."
   "Extract the content of the context ELEMENT."
   (with-slots (name) element
     (with-current-buffer name
-      (buffer-substring-no-properties (point-min) (point-max)))))
+      (let* ((data (buffer-substring-no-properties (point-min) (point-max)))
+	     (content (if (derived-mode-p 'org-mode)
+			  (ellama-convert-org-to-md data)
+			data)))
+	content))))
 
 (cl-defmethod ellama-context-element-display
   ((element ellama-context-element-buffer))
@@ -1119,6 +1141,46 @@ If EPHEMERAL non nil new session will not be associated with any file."
   (with-slots (name) element
     (format "[[elisp:(display-buffer \"%s\")][%s]]" name name)))
 
+;; Buffer quote context elements
+
+(defclass ellama-context-element-buffer-quote (ellama-context-element)
+  ((name :initarg :name :type string)
+   (content :initarg :content :type string))
+  "A structure for holding information about a context element.")
+
+(cl-defmethod ellama-context-element-extract
+  ((element ellama-context-element-buffer-quote))
+  "Extract the content of the context ELEMENT."
+  (oref element content))
+
+(cl-defmethod ellama-context-element-display
+  ((element ellama-context-element-buffer-quote))
+  "Display the context ELEMENT."
+  (oref element name))
+
+(cl-defmethod ellama-context-element-format
+  ((element ellama-context-element-buffer-quote) (mode (eql 'markdown-mode)))
+  "Format the context ELEMENT for the major MODE."
+  (ignore mode)
+  (with-slots (name content) element
+    (if ellama-show-quotes
+	(format "[%s](%s):\n%s\n\n"
+		name name
+		(ellama--md-quote content))
+      (format "[%s](%s):\n```emacs-lisp\n(display-buffer \"%s\")"
+	      name name (ellama--quote-buffer content)))))
+
+(cl-defmethod ellama-context-element-format
+  ((element ellama-context-element-buffer-quote) (mode (eql 'org-mode)))
+  "Format the context ELEMENT for the major MODE."
+  (ignore mode)
+  (with-slots (name content) element
+    (if ellama-show-quotes
+	(format "[[%s][%s]]:\n#+BEGIN_QUOTE\n%s\n#+END_QUOTE\n"
+		name name (ellama--org-quote content))
+      (format "[[%s][%s]] [[elisp:(display-buffer \"%s\")][show]]"
+	      name name (ellama--quote-buffer content)))))
+
 ;; File context element
 
 (defclass ellama-context-element-file (ellama-context-element)
@@ -1131,7 +1193,11 @@ If EPHEMERAL non nil new session will not be associated with any file."
   (with-slots (name) element
     (with-temp-buffer
       (insert-file-contents name)
-      (buffer-substring-no-properties (point-min) (point-max)))))
+      (let* ((data (buffer-substring-no-properties (point-min) (point-max)))
+	     (ext (file-name-extension name)))
+	(if (string= ext "org")
+	    (ellama-convert-org-to-md data)
+	  data)))))
 
 (cl-defmethod ellama-context-element-display
   ((element ellama-context-element-file))
@@ -1442,11 +1508,19 @@ If EPHEMERAL non nil new session will not be associated with any file."
 
 ;;;###autoload
 (defun ellama-context-add-selection ()
-  "Add file to context."
+  "Add active region to context."
   (interactive)
   (if (region-active-p)
-      (let* ((content (buffer-substring-no-properties (region-beginning) (region-end)))
-             (element (ellama-context-element-text :content content)))
+      (let* ((data (buffer-substring-no-properties (region-beginning) (region-end)))
+	     (content (if (derived-mode-p 'org-mode)
+			  (ellama-convert-org-to-md data)
+			data))
+	     (file-name (buffer-file-name))
+	     (buffer-name (buffer-name (current-buffer)))
+             (element (if file-name
+			  (ellama-context-element-file-quote :path file-name
+							     :content content)
+			(ellama-context-element-buffer-quote :name buffer-name :content content))))
         (ellama-context-element-add element))
     (warn "No active region")))
 
@@ -1572,6 +1646,28 @@ Otherwire return current active session."
       (with-current-buffer (ellama-get-session-buffer ellama--current-session-id)
 	ellama--current-session))))
 
+(defun ellama-collapse-org-quotes ()
+  "Collapse quote blocks in curent buffer."
+  (declare-function org-element-map "ext:org-element")
+  (declare-function org-element-parse-buffer "ext:org-element")
+  (declare-function org-element-property "ext:org-element")
+  (declare-function org-hide-block-toggle "ext:org-compat")
+  (when (derived-mode-p 'org-mode)
+    (progn (save-excursion
+	     (goto-char (point-min))
+	     (org-element-map (org-element-parse-buffer) 'quote-block
+	       (lambda (block)
+		 (goto-char (org-element-property :begin block))
+		 (org-hide-block-toggle 't)))))))
+
+(defun ellama-hide-quotes ()
+  "Hide quotes in current session buffer if needed."
+  (when-let* ((ellama-session-hide-org-quotes)
+	      (session-id ellama--current-session-id)
+	      (buf (ellama-get-session-buffer session-id)))
+    (with-current-buffer buf
+      (ellama-collapse-org-quotes))))
+
 (defun ellama-stream (prompt &rest args)
   "Query ellama for PROMPT.
 ARGS contains keys for fine control.
@@ -1672,7 +1768,12 @@ failure (with BUFFER current).
 				  llm-prompt
 				  insert-text
 				  (lambda (text)
-				    (funcall insert-text (string-trim text))
+				    (funcall insert-text
+					     (string-trim
+					      (if (and ellama-output-remove-reasoning
+						       (not session))
+						  (ellama-remove-reasoning text)
+						text)))
 				    (with-current-buffer buffer
 				      (accept-change-group ellama--change-group)
 				      (spinner-stop)
@@ -1681,6 +1782,19 @@ failure (with BUFFER current).
 					  (mapc (lambda (fn) (funcall fn text))
 						donecb)
 					(funcall donecb text))
+				      (when ellama-session-hide-org-quotes
+					(ellama-collapse-org-quotes))
+				      (when (and ellama--current-session
+						 ellama-session-remove-reasoning)
+					(mapc (lambda (interaction)
+						(setf (llm-chat-prompt-interaction-content
+						       interaction)
+						      (ellama-remove-reasoning
+						       (llm-chat-prompt-interaction-content
+							interaction))))
+					      (llm-chat-prompt-interactions
+					       (ellama-session-prompt
+						ellama--current-session))))
 				      (setq ellama--current-request nil)
 				      (ellama-request-mode -1)))
 				  (lambda (_ msg)
@@ -2514,8 +2628,8 @@ Call CALLBACK on result list of strings.  ARGS contains keys for fine control.
 (defvar ellama-transient-ollama-model-name "")
 (defvar ellama-transient-temperature 0.7)
 (defvar ellama-transient-context-length 4096)
-(defvar ellama-transient-host nil)
-(defvar ellama-transient-port nil)
+(defvar ellama-transient-host "localhost")
+(defvar ellama-transient-port 11434)
 
 (transient-define-suffix ellama-transient-set-ollama-model ()
   "Set ollama model name."
@@ -2561,10 +2675,14 @@ Call CALLBACK on result list of strings.  ARGS contains keys for fine control.
 (transient-define-suffix ellama-transient-set-provider ()
   "Set transient model to provider."
   (interactive)
-  (set (read
-	(completing-read "Select provider: "
-			 (mapcar #'prin1-to-string ellama-provider-list)))
-       (ellama-construct-ollama-provider-from-transient)))
+  (let ((provider (read
+		   (completing-read "Select provider: "
+				    (mapcar #'prin1-to-string ellama-provider-list)))))
+    (set provider
+	 (ellama-construct-ollama-provider-from-transient))
+    ;; if you change `ellama-provider' you probably want to start new chat session
+    (when (equal provider 'ellama-provider)
+      (setq ellama--current-session-id nil))))
 
 (transient-define-prefix ellama-select-ollama-model ()
   "Select ollama model."

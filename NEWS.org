@@ -1,3 +1,23 @@
+* Version 1.1.3
+- Ensure unique elements in session and global contexts.
+- Change default transient host and port to fix ollama provider setup.
+- Deactivate ellama session on setting ellama-provider.
+- Added functionality to convert Org mode content to Markdown when
+  extracting buffer or file content for the context. This ensures that
+  any Org mode files are properly formatted as Markdown before being
+  processed further.
+* Version 1.1.2
+- Clear session context when resetting context to prevent unexpected
+  behavior.
+* Version 1.1.1
+- Improve ~ellama-add-selection~.
+- Add buffer quote context element.
+* Version 1.1.0
+- Enhancing interaction with reasoning models. Thinking tags within
+  session buffers will be collapsed by default after generation.
+  Outside of ellama sessions reasoning will be removed from model
+  output. This ensures a seamless experience for users interacting
+  with reasoning models.
 * Version 1.0.3
 - Unquote symbols in ~ellama-provider-list~.
 * Version 1.0.2
