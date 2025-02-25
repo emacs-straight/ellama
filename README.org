@@ -35,6 +35,22 @@ You can customize ellama configuration like this:
   (use-package ellama
     :ensure t
     :bind ("C-c e" . ellama-transient-main-menu)
+    ;; send last message in chat buffer with C-c C-c
+    :hook (org-ctrl-c-ctrl-c-final . ellama-chat-send-last-message)
+    :init (setopt ellama-auto-scroll t)
+    :config
+    ;; show ellama context in header line in all buffers
+    (ellama-context-header-line-global-mode +1))
+#+END_SRC
+
+More sofisticated configuration example:
+
+#+BEGIN_SRC  emacs-lisp
+  (use-package ellama
+    :ensure t
+    :bind ("C-c e" . ellama-transient-main-menu)
+    ;; send last message in chat buffer with C-c C-c
+    :hook (org-ctrl-c-ctrl-c-final . ellama-chat-send-last-message)
     :init
     ;; setup key bindings
     ;; (setopt ellama-keymap-prefix "C-c e")
@@ -97,9 +113,7 @@ You can customize ellama configuration like this:
     (setopt ellama-instant-display-action-function #'display-buffer-at-bottom)
     :config
     ;; show ellama context in header line in all buffers
-    (ellama-context-header-line-global-mode +1)
-    ;; send last message in chat buffer with C-c C-c
-    (add-hook 'org-ctrl-c-ctrl-c-hook #'ellama-chat-send-last-message))
+    (ellama-context-header-line-global-mode +1))
 #+END_SRC
 
 ** Commands
@@ -250,6 +264,10 @@ Delete ellama session.
 
 Change current active session.
 
+*** ellama-session-kill
+
+Select and kill one of active sessions.
+
 *** ellama-session-rename
 
 Rename current ellama session.
@@ -320,6 +338,16 @@ provides much better results on reasoning tasks using AoT.
 Solve domain specific problem with simple chain. It makes LLMs act
 like a professional and adds a planning step.
 
+*** ellama-community-prompts-select-blueprint
+
+Select a prompt from the community prompt collection.
+The user is prompted to choose a role, and then a
+corresponding prompt is inserted into a blueprint buffer.
+
+*** ellama-community-prompts-update-variables
+
+Prompt user for values of variables found in current buffer and update them.
+
 ** Keymap
 
 In any buffer where there is active ellama streaming, you can press
@@ -379,8 +407,7 @@ The following variables can be customized for the Ellama client:
 - ~ellama-assistant-nick~: The assistant nick in logs.
 - ~ellama-language~: The language for Ollama translation. Default
 language is english.
-- ~ellama-provider~: llm provider for ellama. Default provider is
-~ollama~ with [[https://ollama.ai/library/zephyr][zephyr]] model.
+- ~ellama-provider~: llm provider for ellama.
 There are many supported providers: ~ollama~, ~open ai~, ~vertex~,
 ~GPT4All~. For more information see [[https://elpa.gnu.org/packages/llm.html][llm documentation]].
 - ~ellama-providers~: association list of model llm providers with
@@ -444,6 +471,12 @@ argument generated text string.
   ~display-buffer-same-window~.
 - ~ellama-preview-context-element-display-action-function~: Display
   action function for ~ellama-preview-context-element~.
+- ~ellama-context-line-always-visible~: Make context header or mode line always
+  visible, even with empty context.
+- ~ellama-community-prompts-url~: The URL of the community prompts collection.
+- ~ellama-community-prompts-file~: Path to the CSV file containing community prompts.
+  This file is expected to be located inside an ~ellama~ subdirectory
+  within your ~user-emacs-directory~.
 
 ** Minor modes
 
