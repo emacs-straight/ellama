@@ -6,7 +6,7 @@
 ;; URL: http://github.com/s-kostyaev/ellama
 ;; Keywords: help local tools
 ;; Package-Requires: ((emacs "28.1") (llm "0.22.0") (plz "0.8") (transient "0.7") (compat "29.1"))
-;; Version: 1.5.1
+;; Version: 1.5.2
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Created: 8th Oct 2023
 
@@ -980,10 +980,10 @@ If EPHEMERAL non nil new session will not be associated with any file."
 	      "Select session to remove: "
 	      (hash-table-keys ellama--active-sessions)))
 	 (buffer (ellama-get-session-buffer id))
-	 (file (buffer-file-name buffer))
+	 (file (when buffer (buffer-file-name buffer)))
 	 (session-file (when file (ellama--get-session-file-name file)))
 	 (translation-file (when file (ellama--get-translation-file-name file))))
-    (kill-buffer buffer)
+    (when buffer (kill-buffer buffer))
     (when file (delete-file file t))
     (when session-file (delete-file session-file t))
     (mapc
@@ -1022,7 +1022,7 @@ If EPHEMERAL non nil new session will not be associated with any file."
 	      "Select session to kill: "
 	      (hash-table-keys ellama--active-sessions)))
 	 (buffer (ellama-get-session-buffer id)))
-    (kill-buffer buffer)))
+    (when buffer (kill-buffer buffer))))
 
 ;;;###autoload
 (defun ellama-session-rename ()
