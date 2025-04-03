@@ -399,8 +399,7 @@ There are many supported providers: ‘ollama’, ‘open ai’, ‘vertex’,
      name as key.
    • ‘ellama-spinner-enabled’: Enable spinner during text generation.
    • ‘ellama-spinner-type’: Spinner type for ellama.  Default type is
-‘progress-bar’.
-   • ‘ellama-ollama-binary’: Path to ollama binary.
+     ‘progress-bar’.
    • ‘ellama-auto-scroll’: If enabled ellama buffer will scroll
      automatically during generation.  Disabled by default.
    • ‘ellama-fill-paragraphs’: Option to customize ellama paragraphs
@@ -489,7 +488,9 @@ its pre-existing knowledge, which may not always be appropriate.
 
 A “global context” is maintained, which is a collection of text blocks
 accessible to the LLM when responding to prompts.  This global context
-is prepened to your prompt before transmission to the LLM.
+is prepended to your prompt before transmission to the LLM.
+Additionally, Ellama supports an "ephemeral context," which is temporary
+and only available for a single request.
 
 * Menu:
 
@@ -512,12 +513,15 @@ The Context Commands transient menu is structured as follows:
 
 Context Commands:
 
-   • Add: Provides options for adding content to the global context.
-        • “b” "Add Buffer" ‘ellama-context-add-buffer’
-        • “d” "Add Directory" ‘ellama-context-add-directory’
-        • “f” "Add File" ‘ellama-context-add-file’
-        • “s” "Add Selection" ‘ellama-context-add-selection’
-        • “i” "Add Info Node" ‘ellama-context-add-info-node’
+   • Options: Provides options for managing ephemeral context.
+        • “-e” "Use Ephemeral Context" ‘--ephemeral’
+   • Add: Provides options for adding content to the global or ephemeral
+     context.
+        • “b” "Add Buffer" ‘ellama-transient-add-buffer’
+        • “d” "Add Directory" ‘ellama-transient-add-directory’
+        • “f” "Add File" ‘ellama-transient-add-file’
+        • “s” "Add Selection" ‘ellama-transient-add-selection’
+        • “i” "Add Info Node" ‘ellama-transient-add-info-node’
    • Manage: Provides options for managing the global context.
         • “m” "Manage context" ‘ellama-context-manage’ - Opens the
           context management buffer.
@@ -1411,31 +1415,31 @@ Node: Installation3613
 Node: Commands8621
 Node: Keymap14965
 Node: Configuration17798
-Node: Context Management23139
-Node: Transient Menus for Context Management23932
-Node: Managing the Context25390
-Node: Considerations26165
-Node: Minor modes26758
-Node: ellama-context-header-line-mode28746
-Node: ellama-context-header-line-global-mode29571
-Node: ellama-context-mode-line-mode30291
-Node: ellama-context-mode-line-global-mode31139
-Node: Ellama Session Header Line Mode31843
-Node: Enabling and Disabling32412
-Node: Customization32859
-Node: Ellama Session Mode Line Mode33147
-Node: Enabling and Disabling (1)33732
-Node: Customization (1)34179
-Node: Using Blueprints34473
-Node: Key Components of Ellama Blueprints35092
-Node: Creating and Managing Blueprints35699
-Node: Variable Management36680
-Node: Keymap and Mode37149
-Node: Transient Menus38085
-Node: Running Blueprints programmatically38631
-Node: Acknowledgments39218
-Node: Contributions39931
-Node: GNU Free Documentation License40315
+Node: Context Management23086
+Node: Transient Menus for Context Management23994
+Node: Managing the Context25608
+Node: Considerations26383
+Node: Minor modes26976
+Node: ellama-context-header-line-mode28964
+Node: ellama-context-header-line-global-mode29789
+Node: ellama-context-mode-line-mode30509
+Node: ellama-context-mode-line-global-mode31357
+Node: Ellama Session Header Line Mode32061
+Node: Enabling and Disabling32630
+Node: Customization33077
+Node: Ellama Session Mode Line Mode33365
+Node: Enabling and Disabling (1)33950
+Node: Customization (1)34397
+Node: Using Blueprints34691
+Node: Key Components of Ellama Blueprints35310
+Node: Creating and Managing Blueprints35917
+Node: Variable Management36898
+Node: Keymap and Mode37367
+Node: Transient Menus38303
+Node: Running Blueprints programmatically38849
+Node: Acknowledgments39436
+Node: Contributions40149
+Node: GNU Free Documentation License40533
 
 End Tag Table
 
