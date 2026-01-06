@@ -1,6 +1,6 @@
 ;;; ellama-tools.el --- Working with tools -*- lexical-binding: t; package-lint-main-file: "ellama.el"; -*-
 
-;; Copyright (C) 2023-2025  Free Software Foundation, Inc.
+;; Copyright (C) 2023-2026  Free Software Foundation, Inc.
 
 ;; Author: Sergey Kostyaev <sskostyaev@gmail.com>
 ;; SPDX-License-Identifier: GPL-3.0-or-later
@@ -190,11 +190,11 @@ otherwise."
 
 (defun ellama-tools-read-file-tool (path)
   "Read the file located at the specified PATH."
-  (if (not (file-exists-p path))
-      (format "File %s doesn't exists." path)
-    (with-temp-buffer
-      (insert-file-contents-literally path)
-      (buffer-string))))
+  (json-encode (if (not (file-exists-p path))
+                   (format "File %s doesn't exists." path)
+                 (with-temp-buffer
+                   (insert-file-contents-literally path)
+                   (buffer-string)))))
 
 (defun ellama-tools-read-file-tool-confirm (path)
   "Read the file located at the specified PATH."
@@ -452,7 +452,9 @@ Replace OLDCONTENT with NEWCONTENT."
 
 (defun ellama-tools-grep-tool (search-string)
   "Grep SEARCH-STRING in directory files."
-  (shell-command-to-string (format "find . -type f -exec grep --color=never -nh -e %s \\{\\} +" search-string)))
+  (json-encode
+   (shell-command-to-string
+    (format "find . -type f -exec grep --color=never -nh -e %s \\{\\} +" search-string))))
 
 (defun ellama-tools-grep-tool-confirm (search-string)
   "Grep SEARCH-STRING in directory files."
@@ -476,6 +478,28 @@ Replace OLDCONTENT with NEWCONTENT."
                         "String to search for."))
                 :description
                 "Grep SEARCH-STRING in directory files."))
+
+(defun ellama-tools-grep-in-file-tool (search-string file)
+  "Grep SEARCH-STRING in FILE."
+  (json-encode
+   (shell-command-to-string (format "grep --color=never -nh %s %s" search-string file))))
+
+(defun ellama-tools-grep-in-file-tool-confirm (search-string file)
+  "Confirm grepping for SEARCH-STRING in FILE."
+  (ellama-tools-confirm
+   (format "Allow grepping for %s in file %s?" search-string file)
+   'ellama-tools-grep-in-file-tool
+   (list search-string file)))
+
+(add-to-list
+ 'ellama-tools-available
+ (llm-make-tool :function
+                'ellama-tools-grep-in-file-tool-confirm
+                :name "grep_in_file"
+                :args (list
+                       '(:name "search_string" :type string :description "String to search for.")
+                       '(:name "file" :type file :description "File to search in."))
+                :description "Grep SEARCH-STRING in FILE."))
 
 (defun ellama-tools-list-tool ()
   "List all available tools."
@@ -630,6 +654,85 @@ ANSWER-VARIANT-LIST is a list of possible answer variants."
                 :description
                 "Ask user a QUESTION to receive a clarification.
 ANSWER-VARIANT-LIST is a list of possible answer variants."))
+
+(defun ellama-tools-count-lines-tool (path)
+  "Count lines in file located at PATH."
+  (with-current-buffer (find-file-noselect path)
+    (count-lines (point-min) (point-max))))
+
+(defun ellama-tools-count-lines-tool-confirm (path)
+  "Count lines in file located at PATH."
+  (ellama-tools-confirm
+   (format "Allow counting lines in file %s?" path)
+   'ellama-tools-count-lines-tool
+   (list path)))
+
+(add-to-list
+ 'ellama-tools-available
+ (llm-make-tool :function
+                'ellama-tools-count-lines-tool-confirm
+                :name
+                "count_lines"
+                :args
+                (list '(:name
+                        "path"
+                        :type
+                        string
+                        :description
+                        "Path to the file to count lines in."))
+                :description
+                "Count lines in file located at PATH."))
+
+(defun ellama-tools-lines-range-tool (path from to)
+  "Return content of file located at PATH lines in range FROM TO."
+  (json-encode (with-current-buffer (find-file-noselect path)
+                 (save-excursion
+                   (let ((start (progn
+                                  (goto-char (point-min))
+                                  (forward-line (1- from))
+                                  (beginning-of-line)
+                                  (point)))
+                         (end (progn
+                                (goto-char (point-min))
+                                (forward-line (1- to))
+                                (end-of-line)
+                                (point))))
+                     (buffer-substring-no-properties start end))))))
+
+(defun ellama-tools-lines-range-tool-confirm (path from to)
+  "Return content of file located at PATH lines in range FROM TO."
+  (ellama-tools-confirm
+   (format "Allow getting lines %d to %d from file %s?" from to path)
+   'ellama-tools-lines-range-tool
+   (list path from to)))
+
+(add-to-list
+ 'ellama-tools-available
+ (llm-make-tool :function
+                'ellama-tools-lines-range-tool-confirm
+                :name
+                "lines_range"
+                :args
+                (list '(:name
+                        "path"
+                        :type
+                        string
+                        :description
+                        "Path to the file to get lines from.")
+                      '(:name
+                        "from"
+                        :type
+                        number
+                        :description
+                        "Starting line number.")
+                      '(:name
+                        "to"
+                        :type
+                        number
+                        :description
+                        "Ending line number."))
+                :description
+                "Return content of file located at PATH lines in range FROM TO."))
 
 (provide 'ellama-tools)
 ;;; ellama-tools.el ends here
