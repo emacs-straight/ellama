@@ -423,6 +423,8 @@ Assistant". Previous sentence was written by Ellama itself.
     user confirmation. Dangerous. Use at your own risk.
   • `ellama-tools-allowed': List of allowed `ellama' tools. Tools from
     this list will work without user confirmation.
+  • `ellama-tools-argument-max-length': Max length of function argument
+    in the confirmation prompt. Default value 50.
 
 
 [llm documentation] <https://elpa.gnu.org/packages/llm.html>
