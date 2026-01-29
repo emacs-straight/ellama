@@ -425,6 +425,12 @@ Assistant". Previous sentence was written by Ellama itself.
     this list will work without user confirmation.
   • `ellama-tools-argument-max-length': Max length of function argument
     in the confirmation prompt. Default value 50.
+  • `ellama-blueprint-global-dir': Global directory for storing
+    blueprint files.
+  • `ellama-blueprint-local-dir': Local directory name for
+    project-specific blueprints.
+  • `ellama-blueprint-file-extensions': File extensions recognized as
+    blueprint files.
 
 
 [llm documentation] <https://elpa.gnu.org/packages/llm.html>
@@ -723,7 +729,16 @@ Assistant". Previous sentence was written by Ellama itself.
     community, or all).
 
 
-7.3 Variable Management
+7.3 Blueprints files
+────────────────────
+
+  You can also store blueprints as plain text files. You can store it
+  globally inside `ellama-blueprint-global-dir' or locally in the
+  project local directory `ellama-blueprint-local-dir' with
+  `ellama-blueprint-file-extensions'.
+
+
+7.4 Variable Management
 ───────────────────────
 
   Blueprints can include variables that need to be filled before running
@@ -733,7 +748,7 @@ Assistant". Previous sentence was written by Ellama itself.
     for variables found in the current buffer and fills them.
 
 
-7.4 Keymap and Mode
+7.5 Keymap and Mode
 ───────────────────
 
   Ellama provides a local keymap `ellama-blueprint-mode-map' for
@@ -755,7 +770,7 @@ Assistant". Previous sentence was written by Ellama itself.
   • `C-c v': Fill variables in the current blueprint.
 
 
-7.5 Transient Menus
+7.6 Transient Menus
 ───────────────────
 
   Ellama includes transient menus for easy access to blueprint
@@ -768,7 +783,7 @@ Assistant". Previous sentence was written by Ellama itself.
   commands.
 
 
-7.6 Running Blueprints programmatically
+7.7 Running Blueprints programmatically
 ───────────────────────────────────────
 
   The `ellama-blueprint-run' function initiates a chat session using a

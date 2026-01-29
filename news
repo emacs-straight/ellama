@@ -1,4 +1,20 @@
-1 Version 1.10.11
+1 Version 1.10.12
+═════════════════
+
+  • Added prepend_file tool that allows prepending content to
+    files. This expands the set of file manipulation utilities available
+    through the ellama tools.
+  • Introduced customizable global and local directories for storing
+    blueprint files. Added support for configurable file extensions and
+    utility functions to locate, read, and load blueprints from
+    files. This provides a flexible, project-aware mechanism for
+    discovering and loading blueprint resources.
+  • Switched to backquote quoting for ellama-blueprint font-lock. This
+    adjustment ensures the regex is evaluated correctly and the
+    font-lock face is applied as intended.
+
+
+2 Version 1.10.11
 ═════════════════
 
   • Remove explicit handling of numeric arguments in ellama-tools.
@@ -6,14 +22,14 @@
   • Add MCP Integration documentation.
 
 
-2 Version 1.10.10
+3 Version 1.10.10
 ═════════════════
 
   • Refactored tool confirmation and simplified tool definitions.
   • Simplified tool calling response handling.
 
 
-3 Version 1.10.9
+4 Version 1.10.9
 ════════════════
 
   • Use `call-process' instead of `shell-command-to-string' for
@@ -21,7 +37,7 @@
   • Update tools for already running sessions.
 
 
-4 Version 1.10.8
+5 Version 1.10.8
 ════════════════
 
   • Add missing import statements to fix native compiler warnings.
@@ -32,7 +48,7 @@
   • Add AGENTS.md and Makefile.
 
 
-5 Version 1.10.7
+6 Version 1.10.7
 ════════════════
 
   • Add blueprint removal functionality.
@@ -42,7 +58,7 @@
   • Update changelog generation instructions.
 
 
-6 Version 1.10.6
+7 Version 1.10.6
 ════════════════
 
   • Added json-encode wrapping to `ellama-tools-read-file-tool',
@@ -50,7 +66,7 @@
     `ellama-tools-lines-range-tool' outputs for consistent JSON format.
 
 
-7 Version 1.10.5
+8 Version 1.10.5
 ════════════════
 
   • Added `count_lines' and `lines_range' tools for counting lines and
@@ -59,7 +75,7 @@
     `ellama-tools-available' list.
 
 
-8 Version 1.10.4
+9 Version 1.10.4
 ════════════════
 
   • Added a new tool called "ask_user" that allows the system to pose
@@ -71,15 +87,15 @@
     appropriate arguments and description.
 
 
-9 Version 1.10.3
-════════════════
+10 Version 1.10.3
+═════════════════
 
   • Removed redundant checks for function arguments and streamlined the
     execution logic in ellama-tools.el, making the code more concise and
     maintainable by using the apply function directly in all cases.
 
 
-10 Version 1.10.2
+11 Version 1.10.2
 ═════════════════
 
   • Added directory tracking to sessions, including a directory path in
@@ -87,7 +103,7 @@
     session is initialized to maintain working directory context.
 
 
-11 Version 1.10.1
+12 Version 1.10.1
 ═════════════════
 
   • Added option to allow all tools without confirmation using new
@@ -110,21 +126,9 @@
     for better tool integration.
 
 
-12 Version 1.10.0
+13 Version 1.10.0
 ═════════════════
 
   • Added comprehensive tool support, enabling filesystem operations,
-    shell commands, and utilities through LLM tools, including tool
-    registration, file operations, directory tree exploration, and
-    date/time utilities.
-  • Integrated tool system into `ellama.el', adding dependencies,
-    modifying session creation, and refactoring error and response
-    handlers.
-  • Implemented a new transient menu for managing tools with
-    enable/disable functionalities, accessible via the main transient
-    interface.
-  • Added user confirmation system for potentially dangerous operations
-    like file and shell command executions.
-  • Refactored tool confirmation logic and response handling in
-    `ellama-tools.el'
+    shell
   …  …
