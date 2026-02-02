@@ -1,4 +1,16 @@
-1 Version 1.11.0
+1 Version 1.11.1
+════════════════
+
+  • Add AGENTS.md support to system message. Include the AGENTS.md file
+    content from the current project or subproject in the system message
+    by adding helper functions to locate and read the file from the
+    directory tree up to the project root.
+  • Refine style guidelines and remove old instructions. Updated
+    docstring formatting rules in AGENTS.md and removed legacy
+    instructions.org file.
+
+
+2 Version 1.11.0
 ════════════════
 
   • Add skills system to Ellama.
@@ -6,7 +18,7 @@
   • Add changelog generation skill to the project.
 
 
-2 Version 1.10.12
+3 Version 1.10.12
 ═════════════════
 
   • Added prepend_file tool that allows prepending content to
@@ -22,7 +34,7 @@
     font-lock face is applied as intended.
 
 
-3 Version 1.10.11
+4 Version 1.10.11
 ═════════════════
 
   • Remove explicit handling of numeric arguments in ellama-tools.
@@ -30,14 +42,14 @@
   • Add MCP Integration documentation.
 
 
-4 Version 1.10.10
+5 Version 1.10.10
 ═════════════════
 
   • Refactored tool confirmation and simplified tool definitions.
   • Simplified tool calling response handling.
 
 
-5 Version 1.10.9
+6 Version 1.10.9
 ════════════════
 
   • Use `call-process' instead of `shell-command-to-string' for
@@ -45,7 +57,7 @@
   • Update tools for already running sessions.
 
 
-6 Version 1.10.8
+7 Version 1.10.8
 ════════════════
 
   • Add missing import statements to fix native compiler warnings.
@@ -56,7 +68,7 @@
   • Add AGENTS.md and Makefile.
 
 
-7 Version 1.10.7
+8 Version 1.10.7
 ════════════════
 
   • Add blueprint removal functionality.
@@ -66,7 +78,7 @@
   • Update changelog generation instructions.
 
 
-8 Version 1.10.6
+9 Version 1.10.6
 ════════════════
 
   • Added json-encode wrapping to `ellama-tools-read-file-tool',
@@ -74,8 +86,8 @@
     `ellama-tools-lines-range-tool' outputs for consistent JSON format.
 
 
-9 Version 1.10.5
-════════════════
+10 Version 1.10.5
+═════════════════
 
   • Added `count_lines' and `lines_range' tools for counting lines and
     retrieving file content by line range.
@@ -83,7 +95,7 @@
     `ellama-tools-available' list.
 
 
-10 Version 1.10.4
+11 Version 1.10.4
 ═════════════════
 
   • Added a new tool called "ask_user" that allows the system to pose
@@ -95,7 +107,7 @@
     appropriate arguments and description.
 
 
-11 Version 1.10.3
+12 Version 1.10.3
 ═════════════════
 
   • Removed redundant checks for function arguments and streamlined the
@@ -103,7 +115,7 @@
     maintainable by using the apply function directly in all cases.
 
 
-12 Version 1.10.2
+13 Version 1.10.2
 ═════════════════
 
   • Added directory tracking to sessions, including a directory path in
@@ -111,7 +123,7 @@
     session is initialized to maintain working directory context.
 
 
-13 Version 1.10.1
+14 Version 1.10.1
 ═════════════════
 
   • Added option to allow all tools without confirmation using new
@@ -123,11 +135,5 @@
   • Added documentation for new tool access configuration options in
     README.org and ellama.info.
   • Refactored tool functions to use new naming conventions with "-tool"
-    suffix and confirmation wrappers with "-tool-confirm" suffix.
-  • Added support for processing and displaying tool uses and their
-    results in LLM responses.
-  • Updated response handler function signature to accept a
-    result-handler and filter function.
-  • Modified response processing logic to handle tool results and
-    continue processing with updated prompts.
+    suffix
   …  …

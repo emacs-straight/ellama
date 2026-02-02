@@ -6,7 +6,7 @@
 ;; URL: http://github.com/s-kostyaev/ellama
 ;; Keywords: help local tools
 ;; Package-Requires: ((emacs "28.1") (llm "0.24.0") (plz "0.8") (transient "0.7") (compat "29.1") (yaml "1.2.3"))
-;; Version: 1.11.0
+;; Version: 1.11.1
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Created: 8th Oct 2023
 
@@ -467,6 +467,16 @@ It should be a function with single argument generated text string."
 (defcustom ellama-debug nil
   "Enable debug."
   :type 'boolean)
+
+(defcustom ellama-subagent-default-max-steps 30
+  "Default maximum number of auto-continue steps for a sub-agent."
+  :type 'integer
+  :group 'ellama)
+
+(defcustom ellama-subagent-continue-prompt "Task not marked complete. Continue working. If you are done, YOU MUST use the `report_result` tool."
+  "Prompt sent to sub-agent to keep the loop going."
+  :type 'string
+  :group 'ellama)
 
 (defun ellama--set-file-name-and-save ()
   "Set buffer file name and save buffer."
@@ -1213,9 +1223,39 @@ Otherwire return current active session."
 
 (defvar ellama-global-system nil)
 
+(defun ellama-get-agents-md-path ()
+  "Search for AGENTS.md file from current directory up to project root.
+Returns the full path to AGENTS.md if found, or nil if not found."
+  (let* ((current-dir (file-name-directory (expand-file-name default-directory)))
+         (project-root
+	  (file-name-directory (expand-file-name
+				(or (project-root (project-current)) current-dir))))
+         found-path)
+    ;; Walk up from current directory to project root
+    (while (and (not found-path)
+		(or (string= current-dir project-root)
+		    (string> current-dir project-root)))
+      (let ((agents-path (expand-file-name "AGENTS.md" current-dir)))
+        (when (file-exists-p agents-path)
+          (setq found-path agents-path)))
+      ;; Move to parent directory
+      (setq current-dir (file-name-directory (expand-file-name ".." current-dir))))
+    found-path))
+
+(defun ellama-get-agents-md ()
+  "Return current project or subproject AGENTS.md content."
+  (or (when-let ((path (ellama-get-agents-md-path)))
+	(concat
+	 "\n"
+	 (with-temp-buffer
+	   (insert-file-contents path)
+	   (buffer-string))))
+      ""))
+
 (defun ellama-get-system-message ()
   "Return the effective system message, including dynamically scanned skills."
   (let ((msg (concat (or ellama-global-system "")
+		     (ellama-get-agents-md)
 		     (ellama-skills-generate-prompt))))
     (when (not (string= msg ""))
       msg)))
@@ -1473,6 +1513,8 @@ in.  Default value is (current-buffer).
 
 :point POINT -- POINT is the point in buffer to insert ellama reply at.
 
+:tools LIST -- LIST of enabled in the current session tools.
+
 :filter FILTER -- FILTER is a function that's applied to (partial) response
 strings before they're inserted into the BUFFER.
 
@@ -1519,6 +1561,12 @@ failure (with BUFFER current).
 	 (prompt-with-ctx (ellama-context-prompt-with-context prompt))
 	 (system (or (plist-get args :system)
 		     (ellama-get-system-message)))
+	 (session-tools (and session
+                             (ellama-session-extra session)
+                             (plist-get (ellama-session-extra session) :tools)))
+	 (tools (or session-tools
+		    (plist-get args :tools)
+		    ellama-tools-enabled))
 	 (llm-prompt (if session
 			 (if (llm-chat-prompt-p (ellama-session-prompt session))
 			     (progn
@@ -1526,7 +1574,7 @@ failure (with BUFFER current).
 				(ellama-session-prompt session)
 				prompt-with-ctx)
 			       (setf (llm-chat-prompt-tools (ellama-session-prompt session))
-				     ellama-tools-enabled)
+				     tools)
 			       (when system
 				 (llm-chat-prompt-append-response
 				  (ellama-session-prompt session)
@@ -1534,9 +1582,9 @@ failure (with BUFFER current).
 			       (ellama-session-prompt session))
 			   (setf (ellama-session-prompt session)
 				 (llm-make-chat-prompt prompt-with-ctx :context system
-						       :tools ellama-tools-enabled)))
+						       :tools tools)))
 		       (llm-make-chat-prompt prompt-with-ctx :context system
-					     :tools ellama-tools-enabled))))
+					     :tools tools))))
     (with-current-buffer reasoning-buffer
       (org-mode))
     (with-current-buffer buffer
