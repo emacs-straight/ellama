@@ -1,4 +1,12 @@
-1 Version 1.12.1
+1 Version 1.12.2
+════════════════
+
+  • Add view and reply options to ellama-tools confirmation.
+  • Remove tools list tool to minimize LLMs distraction.
+  • Add automated NEWS formatting using `make refill-news'.
+
+
+2 Version 1.12.1
 ════════════════
 
   • Simplify project root detection in `ellama-get-agents-md-path' to
@@ -7,7 +15,7 @@
     robust when locating the AGENTS.md file.
 
 
-2 Version 1.12.0
+3 Version 1.12.0
 ════════════════
 
   • Add asynchronous task delegation functionality via the new `task'
@@ -25,7 +33,7 @@
     management system.
 
 
-3 Version 1.11.1
+4 Version 1.11.1
 ════════════════
 
   • Add AGENTS.md support to system message. Include the AGENTS.md file
@@ -37,7 +45,7 @@
     instructions.org file.
 
 
-4 Version 1.11.0
+5 Version 1.11.0
 ════════════════
 
   • Add skills system to Ellama.
@@ -45,7 +53,7 @@
   • Add changelog generation skill to the project.
 
 
-5 Version 1.10.12
+6 Version 1.10.12
 ═════════════════
 
   • Added prepend_file tool that allows prepending content to
@@ -61,7 +69,7 @@
     font-lock face is applied as intended.
 
 
-6 Version 1.10.11
+7 Version 1.10.11
 ═════════════════
 
   • Remove explicit handling of numeric arguments in ellama-tools.
@@ -69,14 +77,14 @@
   • Add MCP Integration documentation.
 
 
-7 Version 1.10.10
+8 Version 1.10.10
 ═════════════════
 
   • Refactored tool confirmation and simplified tool definitions.
   • Simplified tool calling response handling.
 
 
-8 Version 1.10.9
+9 Version 1.10.9
 ════════════════
 
   • Use `call-process' instead of `shell-command-to-string' for
@@ -84,8 +92,8 @@
   • Update tools for already running sessions.
 
 
-9 Version 1.10.8
-════════════════
+10 Version 1.10.8
+═════════════════
 
   • Add missing import statements to fix native compiler warnings.
   • Fix parameter order in grep tool confirmation message.
@@ -95,7 +103,7 @@
   • Add AGENTS.md and Makefile.
 
 
-10 Version 1.10.7
+11 Version 1.10.7
 ═════════════════
 
   • Add blueprint removal functionality.
@@ -105,7 +113,7 @@
   • Update changelog generation instructions.
 
 
-11 Version 1.10.6
+12 Version 1.10.6
 ═════════════════
 
   • Added json-encode wrapping to `ellama-tools-read-file-tool',
@@ -113,7 +121,7 @@
     `ellama-tools-lines-range-tool' outputs for consistent JSON format.
 
 
-12 Version 1.10.5
+13 Version 1.10.5
 ═════════════════
 
   • Added `count_lines' and `lines_range' tools for counting lines and
@@ -122,13 +130,10 @@
     `ellama-tools-available' list.
 
 
-13 Version 1.10.4
+14 Version 1.10.4
 ═════════════════
 
   • Added a new tool called "ask_user" that allows the system to pose
     questions to the user and receive clarifications.
   • Added a new tool to append content to files, including
-    `ellama-tools-append-file-tool' and
-    `ellama-tools-append-file-tool-confirm'.
-  • Registered the new append file tool in `ellama-tools-available' with
   …  …
