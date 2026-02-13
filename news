@@ -1,4 +1,55 @@
-1 Version 1.12.3
+1 Version 1.12.6
+════════════════
+
+  • Simplify file writing in `ellama-tools-write-file-tool'. Replaced
+    temp buffer-based file writing with write-region to simplify
+    implementation and avoid temporary buffer overhead.
+  • Refactor file tool parameters. Renamed `path' parameter to
+    `file_name' across all file operation tools to follow GNU coding
+    convention. Updated function signatures, docstrings, and tool
+    definitions accordingly.
+
+
+2 Version 1.12.5
+════════════════
+
+  • Prevent duplicate tools in ellama-tools. Added a test function to
+    add-to-list to check if a tool with the same name already exists
+    before adding it to ellama-tools-available. This prevents duplicate
+    tools from being registered when enabling tools by name.
+  • Update changelog skill quoting style. Changed the changelog
+    generation skill to use org-mode quoting (`text') instead of
+    markdown backticks (`text`). Also use "MUST" instead of "must" to
+    pay LLM's attention to the newline requirement.
+
+
+3 Version 1.12.4
+════════════════
+
+  • Normalize file path in write-file function. Added expand-file-name
+    to properly handle both absolute and relative paths when writing
+    files, preventing potential issues with file path resolution.
+  • Filter function objects from function call arguments. This prevents
+    display of uncallable function objects in the confirmation prompt.
+  • Make task tool unaccessible for general subagents. This change
+    improves security and control over tool access.
+  • Fix file write tool. Corrected the order of operations in
+    ellama-tools-write-file-tool by setting the buffer file name before
+    inserting content.
+  • Fix async tools confirmation. Use callback function to return result
+    to the agent.
+  • Improve system message handling. Added optional MSG parameter to
+    ellama-get-system-message to allow callers to provide custom system
+    messages via the :system plist key. This allows sub-agents to use
+    skills.
+  • Improve agent response result handling. Updated result encoding to
+    return "done" for nil results instead of causing potential errors.
+  • Fix result handling in tool execution wrapper. Improved the logic
+    for handling tool results by ensuring JSON encoding only occurs when
+    a result exists. This change fixes async task execution.
+
+
+4 Version 1.12.3
 ════════════════
 
   • Improve loop control in confirmation dialog. Refactored the while
@@ -8,7 +59,7 @@
     functionality.
 
 
-2 Version 1.12.2
+5 Version 1.12.2
 ════════════════
 
   • Add view and reply options to ellama-tools confirmation.
@@ -16,7 +67,7 @@
   • Add automated NEWS formatting using `make refill-news'.
 
 
-3 Version 1.12.1
+6 Version 1.12.1
 ════════════════
 
   • Simplify project root detection in `ellama-get-agents-md-path' to
@@ -25,7 +76,7 @@
     robust when locating the AGENTS.md file.
 
 
-4 Version 1.12.0
+7 Version 1.12.0
 ════════════════
 
   • Add asynchronous task delegation functionality via the new `task'
@@ -43,7 +94,7 @@
     management system.
 
 
-5 Version 1.11.1
+8 Version 1.11.1
 ════════════════
 
   • Add AGENTS.md support to system message. Include the AGENTS.md file
@@ -51,89 +102,5 @@
     by adding helper functions to locate and read the file from the
     directory tree up to the project root.
   • Refine style guidelines and remove old instructions. Updated
-    docstring formatting rules in AGENTS.md and removed legacy
-    instructions.org file.
-
-
-6 Version 1.11.0
-════════════════
-
-  • Add skills system to Ellama.
-  • Add Agent Skills to the documentation.
-  • Add changelog generation skill to the project.
-
-
-7 Version 1.10.12
-═════════════════
-
-  • Added prepend_file tool that allows prepending content to
-    files. This expands the set of file manipulation utilities available
-    through the ellama tools.
-  • Introduced customizable global and local directories for storing
-    blueprint files. Added support for configurable file extensions and
-    utility functions to locate, read, and load blueprints from
-    files. This provides a flexible, project-aware mechanism for
-    discovering and loading blueprint resources.
-  • Switched to backquote quoting for ellama-blueprint font-lock. This
-    adjustment ensures the regex is evaluated correctly and the
-    font-lock face is applied as intended.
-
-
-8 Version 1.10.11
-═════════════════
-
-  • Remove explicit handling of numeric arguments in ellama-tools.
-  • Add argument processing and type wrapping to tool definitions.
-  • Add MCP Integration documentation.
-
-
-9 Version 1.10.10
-═════════════════
-
-  • Refactored tool confirmation and simplified tool definitions.
-  • Simplified tool calling response handling.
-
-
-10 Version 1.10.9
-═════════════════
-
-  • Use `call-process' instead of `shell-command-to-string' for
-    `grep_in_file' and `apply_patch' tools.
-  • Update tools for already running sessions.
-
-
-11 Version 1.10.8
-═════════════════
-
-  • Add missing import statements to fix native compiler warnings.
-  • Fix parameter order in grep tool confirmation message.
-  • Fix shell command injection vulnerability in grep tools.
-  • Add patch application functionality.
-  • Add *.elc to .gitignore.
-  • Add AGENTS.md and Makefile.
-
-
-12 Version 1.10.7
-═════════════════
-
-  • Add blueprint removal functionality.
-  • Overwrite blueprint with the same name during creation.
-  • Update grep tools to accept directory parameter.
-  • Fix content replacement in edit_file tool.
-  • Update changelog generation instructions.
-
-
-13 Version 1.10.6
-═════════════════
-
-  • Added json-encode wrapping to `ellama-tools-read-file-tool',
-    `ellama-tools-grep-tool', `ellama-tools-grep-in-file-tool' and
-    `ellama-tools-lines-range-tool' outputs for consistent JSON format.
-
-
-14 Version 1.10.5
-═════════════════
-
-  • Added `count_lines' and `lines_range' tools for counting lines and
-    retrieving
+    docstring
   …  …
