@@ -1,4 +1,28 @@
-1 Version 1.12.6
+1 Version 1.12.8
+════════════════
+
+  • Add fallback for AGENTS.md search when
+    `ellama-tools-project-root-tool' returns nil. This ensures reliable
+    detection of the AGENTS.md file by falling back to the current
+    directory.
+
+
+2 Version 1.12.7
+════════════════
+
+  • Fix bug when only single tool was available. This change fixes a
+    duplicate checking issue in the tool list by using `llm-tool-name'
+    instead of `plist-get' for proper duplicate detection.
+  • Make `shell_command' tool async. The tool now executes commands
+    asynchronously using a callback function for better performance.
+  • Trim shell command output and return nil for async tools. This
+    ensures proper return value handling for async commands to maintain
+    compatibility with the llm library.
+  • Add –no-pager flag to git commands in changelog generation. This
+    prevents output paging and ensures clean command output.
+
+
+3 Version 1.12.6
 ════════════════
 
   • Simplify file writing in `ellama-tools-write-file-tool'. Replaced
@@ -10,7 +34,7 @@
     definitions accordingly.
 
 
-2 Version 1.12.5
+4 Version 1.12.5
 ════════════════
 
   • Prevent duplicate tools in ellama-tools. Added a test function to
@@ -23,7 +47,7 @@
     pay LLM's attention to the newline requirement.
 
 
-3 Version 1.12.4
+5 Version 1.12.4
 ════════════════
 
   • Normalize file path in write-file function. Added expand-file-name
@@ -49,7 +73,7 @@
     a result exists. This change fixes async task execution.
 
 
-4 Version 1.12.3
+6 Version 1.12.3
 ════════════════
 
   • Improve loop control in confirmation dialog. Refactored the while
@@ -59,7 +83,7 @@
     functionality.
 
 
-5 Version 1.12.2
+7 Version 1.12.2
 ════════════════
 
   • Add view and reply options to ellama-tools confirmation.
@@ -67,7 +91,7 @@
   • Add automated NEWS formatting using `make refill-news'.
 
 
-6 Version 1.12.1
+8 Version 1.12.1
 ════════════════
 
   • Simplify project root detection in `ellama-get-agents-md-path' to
@@ -76,31 +100,11 @@
     robust when locating the AGENTS.md file.
 
 
-7 Version 1.12.0
+9 Version 1.12.0
 ════════════════
 
   • Add asynchronous task delegation functionality via the new `task'
     tool that allows delegating descriptions to subagents with custom
     roles and max-steps limits.
   • Add configurable subagent roles with `ellama-tools-subagent-roles'
-    customization variable, enabling custom providers, system prompts
-    and tool access permissions for different agent types.
-  • Add JSON support to answer variants in the
-    `ellama-tools-ask-user-tool' to handle both list and string inputs.
-  • Simplify tool result handling by adding nil checks before JSON
-    encoding.
-  • Remove redundant tool definitions including `enable_tool',
-    `disable_tool', `search_tools', and `today' to streamline the tool
-    management system.
-
-
-8 Version 1.11.1
-════════════════
-
-  • Add AGENTS.md support to system message. Include the AGENTS.md file
-    content from the current project or subproject in the system message
-    by adding helper functions to locate and read the file from the
-    directory tree up to the project root.
-  • Refine style guidelines and remove old instructions. Updated
-    docstring
   …  …
