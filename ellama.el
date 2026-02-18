@@ -6,7 +6,7 @@
 ;; URL: http://github.com/s-kostyaev/ellama
 ;; Keywords: help local tools
 ;; Package-Requires: ((emacs "28.1") (llm "0.24.0") (plz "0.8") (transient "0.7") (compat "29.1") (yaml "1.2.3"))
-;; Version: 1.12.9
+;; Version: 1.12.15
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Created: 8th Oct 2023
 
@@ -468,6 +468,15 @@ It should be a function with single argument generated text string."
   "Enable debug."
   :type 'boolean)
 
+(defcustom ellama-sessions-directory (file-truename
+				      (file-name-concat
+				       user-emacs-directory
+				       "ellama-sessions"))
+  "Directory for saved ellama sessions."
+  :type 'string)
+
+(defvar ellama--current-session-id nil)
+
 (defun ellama--set-file-name-and-save ()
   "Set buffer file name and save buffer."
   (interactive)
@@ -530,24 +539,56 @@ It should be a function with single argument generated text string."
 (defun ellama--replace-first-begin-src (text)
   "Replace first begin src in TEXT."
   (if (not (string-match-p (rx (literal "#+BEGIN_SRC")) text))
-      (replace-regexp-in-string "^[[:space:]]*```\\(\\(.\\|\n\\)*\\)" "#+BEGIN_SRC\\1" text)
+      (with-temp-buffer
+        (insert text)
+        (goto-char (point-min))
+        (when (re-search-forward "^[[:space:]]*```" nil t)
+          (replace-match "#+BEGIN_SRC" t t))
+        (buffer-substring-no-properties (point-min) (point-max)))
     text))
+
+(defun ellama--replace-inline-code-fences (text)
+  "Replace inline markdown code fences in TEXT with org equivalents."
+  (with-temp-buffer
+    (insert text)
+    (goto-char (point-min))
+    (while (not (eobp))
+      (let* ((line-beg (line-beginning-position))
+             (line-end (line-end-position))
+             (line (buffer-substring-no-properties line-beg line-end))
+             (fence-pos (string-match "```" line)))
+        ;; Handle cases like `text ```lang' and `text ```text'.
+        (when (and fence-pos (> fence-pos 0))
+          (let ((prefix (substring line 0 fence-pos))
+                (suffix (substring line (+ fence-pos 3))))
+            (cond
+             ((string-match-p "\\`[A-Za-z0-9-]+\\'" suffix)
+              (goto-char line-beg)
+              (delete-region line-beg line-end)
+              (insert prefix "\n#+BEGIN_SRC " suffix))
+             ((not (string= suffix ""))
+              (goto-char line-beg)
+              (delete-region line-beg line-end)
+              (insert prefix "\n#+END_SRC\n" suffix))))))
+      (forward-line 1))
+    (buffer-substring-no-properties (point-min) (point-max))))
 
 (defun ellama--replace-bad-code-blocks (text)
   "Replace code src blocks in TEXT."
   (with-temp-buffer
     (insert (propertize text 'hard t))
-    (goto-char (point-min))
-    ;; skip good code blocks
-    (while (re-search-forward "#\\+BEGIN_SRC\\(.\\|\n\\)*?#\\+END_SRC" nil t))
-    (while (re-search-forward "#\\+END_SRC\\(\\(.\\|\n\\)*?\\)#\\+END_SRC" nil t)
-      (unless (string-match-p "#\\+BEGIN_SRC" (match-string 1))
-	(replace-match "#+BEGIN_SRC\\1#+END_SRC")))
-    (goto-char (match-beginning 0))
-    (while (re-search-backward "#\\+END_SRC\\(\\(.\\|\n\\)*?\\)#\\+END_SRC" nil t)
-      (unless (string-match-p "#\\+BEGIN_SRC" (match-string 1))
-	(replace-match "#+BEGIN_SRC\\1#+END_SRC"))
-      (goto-char (match-beginning 0)))
+    (let ((open-blocks 0)
+          (pattern
+           "^\\([[:blank:]]*\\)#\\+\\(BEGIN_SRC\\|END_SRC\\)\\(?:[[:blank:]].*\\)?$"))
+      (goto-char (point-min))
+      (while (re-search-forward pattern nil t)
+        (if (string= (match-string 2) "BEGIN_SRC")
+            (setq open-blocks (1+ open-blocks))
+          (if (> open-blocks 0)
+              (setq open-blocks (1- open-blocks))
+            (let ((indent (match-string 1)))
+              (replace-match (concat indent "#+BEGIN_SRC") t t))
+            (setq open-blocks (1+ open-blocks))))))
     (buffer-substring-no-properties (point-min) (point-max))))
 
 (defun ellama--replace (from to beg end)
@@ -655,8 +696,7 @@ This filter contains only subset of markdown syntax to be good enough."
     text
     ;; code blocks
     (replace-regexp-in-string "^[[:space:]]*```\\(.+\\)$" "#+BEGIN_SRC \\1")
-    (replace-regexp-in-string "^\\(.+\\)```\\([A-Za-z0-9\\-]+\\)$" "\\1\n#+BEGIN_SRC \\2")
-    (replace-regexp-in-string "^\\(.+\\)```\\(.+\\)$" "\\1\n#+END_SRC\n\\2")
+    (ellama--replace-inline-code-fences)
     (ellama--replace-first-begin-src)
     (replace-regexp-in-string "^<!-- language: \\(.+\\) -->\n```" "#+BEGIN_SRC \\1")
     (replace-regexp-in-string "^[[:space:]]*```$" "#+END_SRC")
@@ -677,13 +717,6 @@ This filter contains only subset of markdown syntax to be good enough."
 	   ;; If ellama-enable-keymap is nil, remove the key bindings
 	   (define-key global-map (kbd ellama-keymap-prefix) nil))))
 
-(defcustom ellama-sessions-directory (file-truename
-				      (file-name-concat
-				       user-emacs-directory
-				       "ellama-sessions"))
-  "Directory for saved ellama sessions."
-  :type 'string)
-
 (defcustom ellama-naming-provider nil
   "LLM provider for generating names."
   :type '(sexp :validate llm-standard-provider-p))
@@ -693,8 +726,6 @@ This filter contains only subset of markdown syntax to be good enough."
   :type 'boolean)
 
 (defvar-local ellama--current-session nil)
-
-(defvar ellama--current-session-id nil)
 
 (defcustom ellama-session-line-template " ellama session: %s"
   "Template for formatting the current session line."
@@ -708,14 +739,6 @@ This filter contains only subset of markdown syntax to be good enough."
 			ellama--current-session-id))
 	      'face 'ellama-face))
 
-(defun ellama-session-update-header-line ()
-  "Update header line for ellama session header line mode."
-  (when (listp header-line-format)
-    (let ((element '(:eval (ellama-session-line))))
-      (if ellama-session-header-line-mode
-          (add-to-list 'header-line-format element t)
-	(setq header-line-format (delete element header-line-format))))))
-
 ;;;###autoload
 (define-minor-mode ellama-session-header-line-mode
   "Toggle Ellama Session header line mode."
@@ -727,14 +750,6 @@ This filter contains only subset of markdown syntax to be good enough."
   ellama-session-header-line-mode
   ellama-session-header-line-mode)
 
-(defun ellama-session-update-mode-line ()
-  "Update mode line for ellama session mode line mode."
-  (when (listp mode-line-format)
-    (let ((element '(:eval (ellama-session-line))))
-      (if ellama-session-mode-line-mode
-	  (add-to-list 'mode-line-format element t)
-	(setq mode-line-format (delete element mode-line-format))))))
-
 ;;;###autoload
 (define-minor-mode ellama-session-mode-line-mode
   "Toggle Ellama Session mode line mode."
@@ -745,6 +760,22 @@ This filter contains only subset of markdown syntax to be good enough."
 (define-globalized-minor-mode ellama-session-mode-line-global-mode
   ellama-session-mode-line-mode
   ellama-session-mode-line-mode)
+
+(defun ellama-session-update-header-line ()
+  "Update header line for ellama session header line mode."
+  (when (listp header-line-format)
+    (let ((element '(:eval (ellama-session-line))))
+      (if ellama-session-header-line-mode
+          (add-to-list 'header-line-format element t)
+	(setq header-line-format (delete element header-line-format))))))
+
+(defun ellama-session-update-mode-line ()
+  "Update mode line for ellama session mode line mode."
+  (when (listp mode-line-format)
+    (let ((element '(:eval (ellama-session-line))))
+      (if ellama-session-mode-line-mode
+	  (add-to-list 'mode-line-format element t)
+	(setq mode-line-format (delete element mode-line-format))))))
 
 (defvar ellama--active-sessions (make-hash-table :test #'equal))
 
@@ -1411,18 +1442,43 @@ REASONING-BUFFER is a buffer for reasoning."
 	(when text
 	  (string-trim text)))))))
 
-(defun ellama--error-handler (buffer errcb)
+(defun ellama--tool-call-error-p (err-type)
+  "Return non-nil when ERR-TYPE indicates a tool call error."
+  (and err-type
+       (memq 'llm-tool-call-error
+	     (get err-type 'error-conditions))))
+
+(defun ellama--append-tool-error-to-prompt (prompt msg)
+  "Append tool call error MSG to PROMPT."
+  (when prompt
+    (llm-chat-prompt-append-response
+     prompt
+     (if (stringp msg)
+	 msg
+       (format "%s" (or msg "Unknown tool call error")))
+     'system)))
+
+(defun ellama--error-handler (buffer errcb &optional prompt
+				     retry-fn)
   "Error handler function.
 BUFFER is the current ellama buffer.
-ERRCB is an error callback."
-  (lambda (_ msg)
+ERRCB is an error callback.
+PROMPT is the active prompt.
+RETRY-FN is called to retry the request."
+  (lambda (err-type msg)
     (with-current-buffer buffer
-      (cancel-change-group ellama--change-group)
-      (when ellama-spinner-enabled
-	(spinner-stop))
-      (funcall errcb msg)
-      (setq ellama--current-request nil)
-      (ellama-request-mode -1))))
+      (if (and retry-fn
+	       prompt
+	       (ellama--tool-call-error-p err-type))
+	  (progn
+	    (ellama--append-tool-error-to-prompt prompt msg)
+	    (funcall retry-fn))
+	(cancel-change-group ellama--change-group)
+	(when ellama-spinner-enabled
+	  (spinner-stop))
+	(funcall errcb msg)
+	(setq ellama--current-request nil)
+	(ellama-request-mode -1)))))
 
 (defun ellama--response-handler (result-handler reasoning-buffer buffer donecb errcb provider llm-prompt async filter)
   "Response handler function.
@@ -1445,41 +1501,56 @@ inserted into the BUFFER."
 		(not reasoning))
 	(when (not tool-result) (kill-buffer reasoning-buffer)))
       (if tool-result
-	  (let* ((insert-text
-		  (ellama--insert buffer (with-current-buffer buffer (if ellama--current-session
-									 (point-max)
-								       (point)))
-				  filter))
-		 (insert-reasoning
-		  (ellama--insert reasoning-buffer nil #'ellama--translate-markdown-to-org-filter))
-		 (handler (ellama--handle-partial insert-text insert-reasoning reasoning-buffer))
-		 (cnt 0)
-		 (skip-handler
-		  (lambda (request)
-		    (if (= cnt ellama-response-process-method)
-			(progn
-			  (funcall handler request)
-			  (setq cnt 0))
-		      (cl-incf cnt)))))
-	    (with-current-buffer buffer
-	      (if async
-		  (llm-chat-async
-		   provider
-		   llm-prompt
-		   (ellama--response-handler
-		    handler reasoning-buffer buffer donecb errcb provider llm-prompt async filter)
-		   (ellama--error-handler buffer errcb)
-		   t)
-		(llm-chat-streaming
-		 provider
-		 llm-prompt
-		 (if (integerp ellama-response-process-method)
-		     skip-handler handler)
-		 (ellama--response-handler
-		  handler
-		  reasoning-buffer buffer donecb errcb provider llm-prompt async filter)
-		 (ellama--error-handler buffer errcb)
-		 t))))
+	  (cl-labels
+	      ((start-request ()
+		 (let* ((insert-text
+			 (ellama--insert
+			  buffer
+			  (with-current-buffer buffer
+			    (if ellama--current-session
+				(point-max)
+			      (point)))
+			  filter))
+			(insert-reasoning
+			 (ellama--insert reasoning-buffer nil
+					 #'ellama--translate-markdown-to-org-filter))
+			(handler
+			 (ellama--handle-partial
+			  insert-text insert-reasoning reasoning-buffer))
+			(cnt 0)
+			(skip-handler
+			 (lambda (request)
+			   (if (= cnt ellama-response-process-method)
+			       (progn
+				 (funcall handler request)
+				 (setq cnt 0))
+			     (cl-incf cnt))))
+			(error-handler
+			 (ellama--error-handler
+			  buffer errcb llm-prompt
+			  (lambda ()
+			    (start-request)))))
+		   (with-current-buffer buffer
+		     (if async
+			 (llm-chat-async
+			  provider
+			  llm-prompt
+			  (ellama--response-handler
+			   handler reasoning-buffer buffer donecb errcb provider
+			   llm-prompt async filter)
+			  error-handler
+			  t)
+		       (llm-chat-streaming
+			provider
+			llm-prompt
+			(if (integerp ellama-response-process-method)
+			    skip-handler handler)
+			(ellama--response-handler
+			 handler reasoning-buffer buffer donecb errcb provider
+			 llm-prompt async filter)
+			error-handler
+			t))))))
+	    (start-request))
 	(with-current-buffer buffer
 	  (accept-change-group ellama--change-group)
 	  (when ellama-spinner-enabled
@@ -1566,10 +1637,8 @@ failure (with BUFFER current).
 				prompt-with-ctx)
 			       (setf (llm-chat-prompt-tools (ellama-session-prompt session))
 				     tools)
-			       (when system
-				 (llm-chat-prompt-append-response
-				  (ellama-session-prompt session)
-				  system 'system))
+			       ;; System message is part of prompt context and should not be
+			       ;; appended on each interaction.
 			       (ellama-session-prompt session))
 			   (setf (ellama-session-prompt session)
 				 (llm-make-chat-prompt prompt-with-ctx :context system
@@ -1580,48 +1649,64 @@ failure (with BUFFER current).
       (org-mode))
     (with-current-buffer buffer
       (ellama-request-mode +1)
-      (let* ((insert-text
-	      (ellama--insert buffer point filter))
-	     (insert-reasoning
-	      (ellama--insert reasoning-buffer nil #'ellama--translate-markdown-to-org-filter)))
-	(setq ellama--change-group (prepare-change-group))
-	(activate-change-group ellama--change-group)
-	(when ellama-spinner-enabled
-	  (require 'spinner)
-	  (spinner-start ellama-spinner-type))
-	(let* ((handler (ellama--handle-partial insert-text insert-reasoning reasoning-buffer))
-	       (request (pcase ellama-response-process-method
-			  ('async (llm-chat-async
+      (cl-labels
+	  ((start-request ()
+	     (let* ((insert-text
+		     (ellama--insert buffer point filter))
+		    (insert-reasoning
+		     (ellama--insert reasoning-buffer nil
+				     #'ellama--translate-markdown-to-org-filter))
+		    (handler
+		     (ellama--handle-partial
+		      insert-text insert-reasoning reasoning-buffer))
+		    (error-handler
+		     (ellama--error-handler
+		      buffer errcb llm-prompt
+		      #'start-request))
+		    (request (pcase ellama-response-process-method
+			       ('async (llm-chat-async
+					provider
+					llm-prompt
+					(ellama--response-handler
+					 handler reasoning-buffer buffer donecb errcb provider
+					 llm-prompt t filter)
+					error-handler
+					t))
+			       ('streaming (llm-chat-streaming
+					    provider
+					    llm-prompt
+					    handler
+					    (ellama--response-handler
+					     handler reasoning-buffer buffer donecb errcb
+					     provider llm-prompt nil filter)
+					    error-handler
+					    t))
+			       ((pred integerp)
+				(let* ((cnt 0)
+				       (skip-handler
+					(lambda (request)
+					  (if (= cnt ellama-response-process-method)
+					      (progn
+						(funcall handler request)
+						(setq cnt 0))
+					    (cl-incf cnt)))))
+				  (llm-chat-streaming
 				   provider
 				   llm-prompt
-				   (ellama--response-handler handler reasoning-buffer buffer donecb errcb provider llm-prompt t filter)
-				   (ellama--error-handler buffer errcb)
-				   t))
-			  ('streaming (llm-chat-streaming
-				       provider
-				       llm-prompt
-				       handler
-				       (ellama--response-handler handler reasoning-buffer buffer donecb errcb provider llm-prompt nil filter)
-				       (ellama--error-handler buffer errcb)
-				       t))
-			  ((pred integerp)
-			   (let* ((cnt 0)
-				  (skip-handler
-				   (lambda (request)
-				     (if (= cnt ellama-response-process-method)
-					 (progn
-					   (funcall handler request)
-					   (setq cnt 0))
-				       (cl-incf cnt)))))
-			     (llm-chat-streaming
-			      provider
-			      llm-prompt
-			      skip-handler
-			      (ellama--response-handler handler reasoning-buffer buffer donecb errcb provider llm-prompt t filter)
-			      (ellama--error-handler buffer errcb)
-			      t))))))
-	  (with-current-buffer buffer
-	    (setq ellama--current-request request)))))))
+				   skip-handler
+				   (ellama--response-handler
+				    handler reasoning-buffer buffer donecb errcb provider
+				    llm-prompt t filter)
+				   error-handler
+				   t))))))
+	       (setq ellama--change-group (prepare-change-group))
+	       (activate-change-group ellama--change-group)
+	       (when ellama-spinner-enabled
+		 (require 'spinner)
+		 (spinner-start ellama-spinner-type))
+	       (with-current-buffer buffer
+		 (setq ellama--current-request request)))))
+	(start-request)))))
 
 (defun ellama-chain (initial-prompt forms &optional acc)
   "Call chain of FORMS on INITIAL-PROMPT.

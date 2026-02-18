@@ -4,6 +4,8 @@
 
 1. **Build**: `make build`
 2. **Run unit tests** (ERT): `make test`
+3. **Check native compilation warnings**: `make check-compile-warnings`
+4. **Export manual**: `make manual`
 
 ## Code Style Guidelines
 
@@ -17,6 +19,8 @@
 - **Docstrings**: One‑line summary, then optional details; keep under 80 chars
   per line. Do not add empty lines. If there are multiple sentences on one line,
   sentences should be separated by two spaces.
+  Use base verb form in function docstrings (no `-s`), e.g. `contain` not
+  `contains`, `return` not `returns`.
 - **Comments**: Prefix with `;;` for buffer comments; avoid inline `#` clutter.
 
 ## Operation Guidelines
@@ -35,3 +39,6 @@
 Just one backslash (\) in front of quotes.
 
 3. Do not use git, util requested by user explicitly.
+4. ALWAYS use `oq` skill to see content of `.org` files (for example
+   ./README.org and ./NEWS.org) isntead of `read_file` tool. README.org and
+   NEWS.org are big enough, you NEED to use `oq` skill with it.

@@ -33,6 +33,29 @@
 (require 'json)
 (require 'llm)
 
+(declare-function llm-standard-provider-p "llm-provider-utils" (provider))
+(declare-function ellama-new-session "ellama"
+                  (provider prompt &optional ephemeral))
+(declare-function ellama-session-extra "ellama" (session))
+(declare-function ellama-session-id "ellama" (session))
+(declare-function ellama-stream "ellama" (prompt &rest args))
+
+(defvar ellama-provider)
+(defvar ellama-coding-provider)
+(defvar ellama--current-session)
+(defvar ellama--current-session-id)
+
+(defvar ellama-tools-available nil
+  "Alist containing all registered tools.")
+
+(defvar ellama-tools-enabled nil
+  "List of tools that have been enabled.")
+
+(defun ellama-tools--set-session-extra (session extra)
+  "Set SESSION EXTRA."
+  (with-no-warnings
+    (setf (ellama-session-extra session) extra)))
+
 (defcustom ellama-tools-allow-all nil
   "Allow `ellama' using all the tools without user confirmation.
 Dangerous.  Use at your own risk."
@@ -112,26 +135,18 @@ Tools from this list will work without user confirmation."
         (setq provider (eval provider)))
       provider)))
 
-(defvar ellama-tools-available nil
-  "Alist containing all registered tools.")
-
-(defvar ellama-tools-enabled nil
-  "List of tools that have been enabled.")
-
 (defvar-local ellama-tools-confirm-allowed (make-hash-table)
   "Contains hash table of allowed functions.
 Key is a function name symbol.  Value is a boolean t.")
 
-(defun ellama-tools-confirm (function &rest args)
-  "Ask user for confirmation before calling FUNCTION with ARGS.
+(defun ellama-tools--confirm-call (function function-name &rest args)
+  "Ask for confirmation before calling FUNCTION named FUNCTION-NAME.
+ARGS are passed to FUNCTION.
 Generates prompt automatically.  User can approve once (y), approve
 for all future calls (a), forbid (n), or view the details in a
 buffer (v) before deciding.  Returns the result of FUNCTION if
 approved, \"Forbidden by the user\" otherwise."
-  (let ((function-name (if (symbolp function)
-			   (symbol-name function)
-			 "anonymous-function"))
-	(confirmation (gethash function ellama-tools-confirm-allowed nil)))
+  (let ((confirmation (gethash function ellama-tools-confirm-allowed nil)))
     (cond
      ;; If user has approved all calls, just execute the function
      ((or confirmation
@@ -221,24 +236,55 @@ approved, \"Forbidden by the user\" otherwise."
                 (funcall cb result-str)
               (or result-str "done")))))))))
 
+(defun ellama-tools-confirm (function &rest args)
+  "Ask user for confirmation before calling FUNCTION with ARGS."
+  (apply #'ellama-tools--confirm-call
+	 function
+	 (if (symbolp function)
+	     (symbol-name function)
+	   "anonymous-function")
+	 args))
+
+(defun ellama-tools-confirm-with-name (function name &rest args)
+  "Ask user for confirmation before calling FUNCTION with ARGS.
+NAME is fallback label used when FUNCTION has no symbol name."
+  (apply #'ellama-tools--confirm-call
+	 function
+	 (if (symbolp function)
+	     (symbol-name function)
+	   (cond
+	    ((stringp name) name)
+	    ((symbolp name) (symbol-name name))
+	    (t "anonymous-function")))
+	 args))
+
+(defun ellama-tools--make-confirm-wrapper (func name)
+  "Make confirmation wrapper for FUNC.
+NAME is fallback label used when FUNC has no symbol name."
+  (if (symbolp func)
+      (lambda (&rest args)
+	(apply #'ellama-tools-confirm func args))
+    (lambda (&rest args)
+      (apply #'ellama-tools-confirm-with-name func name args))))
+
 (defun ellama-tools-wrap-with-confirm (tool-plist)
   "Wrap a tool's function with automatic confirmation.
 TOOL-PLIST is a property list in the format expected by `llm-make-tool'.
 Returns a new tool definition with the :function wrapped."
   (let* ((func (plist-get tool-plist :function))
+         (name (plist-get tool-plist :name))
          (args (plist-get tool-plist :args))
          (wrapped-args
           (mapcar
            (lambda (arg)
-             (let*
-                 ((type (plist-get tool-plist :type))
-                  (wrapped-type (if (symbolp type)
-                                    type
-                                  (intern type))))
+             (let* ((type (plist-get arg :type))
+                    (wrapped-type
+                     (if (symbolp type)
+                         type
+                       (and type (intern type)))))
                (plist-put arg :type wrapped-type)))
            args))
-         (wrapped-func (lambda (&rest args)
-                         (apply #'ellama-tools-confirm func args))))
+         (wrapped-func (ellama-tools--make-confirm-wrapper func name)))
     ;; Return a new plist with the wrapped function
     (setq tool-plist (plist-put tool-plist :function wrapped-func))
     (plist-put tool-plist :args wrapped-args)))
@@ -258,7 +304,8 @@ TOOL-PLIST is a property list in the format expected by `llm-make-tool'."
   (let* ((tool-name name)
          (tool (seq-find (lambda (tool) (string= tool-name (llm-tool-name tool)))
                          ellama-tools-available)))
-    (add-to-list 'ellama-tools-enabled tool)
+    (when tool
+      (add-to-list 'ellama-tools-enabled tool))
     nil))
 
 ;;;###autoload
@@ -306,13 +353,38 @@ TOOL-PLIST is a property list in the format expected by `llm-make-tool'."
   (interactive)
   (setq ellama-tools-enabled nil))
 
+(defun ellama-tools--string-has-raw-bytes-p (string)
+  "Return non-nil when STRING contain binary-like chars.
+Treat Emacs raw-byte chars and NUL bytes as binary-like."
+  (let ((idx 0)
+        (len (length string))
+        found)
+    (while (and (not found) (< idx len))
+      (when (or (> (aref string idx) #x10FFFF)
+                (= (aref string idx) 0))
+        (setq found t))
+      (setq idx (1+ idx)))
+    found))
+
+(defun ellama-tools--sanitize-tool-text-output (text label)
+  "Return TEXT or a warning when TEXT is binary-like.
+LABEL is used to identify the source in the warning."
+  (if (ellama-tools--string-has-raw-bytes-p text)
+      (concat label
+              " appears to contain binary data.  Reading binary data as "
+              "text is a bad idea for this tool.")
+    text))
+
 (defun ellama-tools-read-file-tool (file-name)
   "Read the file FILE-NAME."
   (json-encode (if (not (file-exists-p file-name))
                    (format "File %s doesn't exists." file-name)
-                 (with-temp-buffer
-                   (insert-file-contents-literally file-name)
-                   (buffer-string)))))
+                 (let ((content (with-temp-buffer
+                                  (insert-file-contents file-name)
+                                  (buffer-string))))
+                   (ellama-tools--sanitize-tool-text-output
+                    content
+                    (format "File %s" file-name))))))
 
 (ellama-tools-define-tool
  '(:function
@@ -485,11 +557,7 @@ Replace OLDCONTENT with NEWCONTENT."
         (coding-system-for-write 'raw-text))
     (when (string-match (regexp-quote oldcontent) content)
       (with-temp-buffer
-        (insert content)
-        (goto-char (match-beginning 0))
-        (delete-region (1+ (match-beginning 0)) (1+ (match-end 0)))
-        (forward-char)
-        (insert newcontent)
+        (insert (replace-match newcontent t t content))
         (write-region (point-min) (point-max) file-name)))))
 
 (ellama-tools-define-tool
@@ -522,17 +590,42 @@ Replace OLDCONTENT with NEWCONTENT."
 (defun ellama-tools-shell-command-tool (callback cmd)
   "Execute shell command CMD.
 CALLBACK – function called once with the result string."
-  (let ((buf (get-buffer-create (concat (make-temp-name " *ellama shell command") "*"))))
-    (set-process-sentinel
-     (start-process "*ellama-shell-command*" buf shell-file-name shell-command-switch cmd)
-     (lambda (process _)
-       (when (not (process-live-p process))
-         (funcall callback
-                  ;; we need to trim trailing newline
-                  (string-trim-right
-                   (with-current-buffer buf (buffer-string))
-                   "\n"))
-         (kill-buffer buf)))))
+  (condition-case err
+      (let ((buf (get-buffer-create
+		  (concat (make-temp-name " *ellama shell command") "*"))))
+	(set-process-sentinel
+	 (start-process
+	  "*ellama-shell-command*" buf shell-file-name shell-command-switch cmd)
+	 (lambda (process _)
+	   (when (not (process-live-p process))
+	     (let* ((raw-output
+		     ;; trim trailing newline to reduce noisy tool output
+		     (string-trim-right
+		      (with-current-buffer buf (buffer-string))
+		      "\n"))
+		    (output
+		     (ellama-tools--sanitize-tool-text-output
+		      raw-output
+		      "Command output"))
+		    (exit-code (process-exit-status process))
+		    (result
+		     (cond
+		      ((and (string= output "") (zerop exit-code))
+		       "Command completed successfully with no output.")
+		      ((string= output "")
+		       (format "Command failed with exit code %d and no output."
+			       exit-code))
+		      ((zerop exit-code)
+		       output)
+		      (t
+		       (format "Command failed with exit code %d.\n%s"
+			       exit-code output)))))
+	       (funcall callback result)
+	       (kill-buffer buf))))))
+    (error
+     (funcall callback
+	      (format "Failed to start shell command: %s"
+		      (error-message-string err)))))
   ;; async tool should always return nil
   ;; to work properly with the llm library
   nil)
@@ -691,7 +784,9 @@ ANSWER-VARIANT-LIST is a list of possible answer variants."))
                                 (forward-line (1- to))
                                 (end-of-line)
                                 (point))))
-                     (buffer-substring-no-properties start end))))))
+                     (ellama-tools--sanitize-tool-text-output
+                      (buffer-substring-no-properties start end)
+                      (format "File %s" file-name)))))))
 
 (ellama-tools-define-tool
  '(:function
@@ -776,8 +871,9 @@ CALLBACK will be used to report result asyncronously."
       (let* ((extra (ellama-session-extra ,session))
              (done (plist-get extra :task-completed)))
         (unless done
-          (setf (ellama-session-extra ,session)
-                (plist-put extra :task-completed t))
+          (ellama-tools--set-session-extra
+           ,session
+           (plist-put extra :task-completed t))
           (funcall ,callback result)))
       "Result received. Task completed.")
     :name "report_result"
@@ -797,12 +893,14 @@ CALLBACK will be used to report result asyncronously."
      (done
       (message "Subagent finished."))
      ((>= steps max)
-      (setf (ellama-session-extra session)
-            (plist-put extra :task-completed t))
+      (ellama-tools--set-session-extra
+       session
+       (plist-put extra :task-completed t))
       (funcall callback (format "Max steps (%d) reached." max)))
      (t
-      (setf (ellama-session-extra session)
-            (plist-put extra :step-count (1+ steps)))
+      (ellama-tools--set-session-extra
+       session
+       (plist-put extra :step-count (1+ steps)))
       (ellama-stream
        ellama-tools-subagent-continue-prompt
        :session session
@@ -844,15 +942,16 @@ ROLE       – role key from `ellama-tools-subagent-roles'."
     ;; Initialize session state (single source of truth)
     ;; ============================================================
 
-    (setf (ellama-session-extra worker)
-          (list
-           :parent-session parent-id
-           :role role-key
-           :tools all-tools
-           :result-callback callback
-           :task-completed nil
-           :step-count 0
-           :max-steps steps-limit))
+    (ellama-tools--set-session-extra
+     worker
+     (list
+      :parent-session parent-id
+      :role role-key
+      :tools all-tools
+      :result-callback callback
+      :task-completed nil
+      :step-count 0
+      :max-steps steps-limit))
 
     ;; ============================================================
     ;; Start the agent loop
