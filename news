@@ -1,11 +1,36 @@
-1 Version 1.12.15
+1 Version 1.12.16
+═════════════════
+
+  • Improve ephemeral context behavior for interactive commands.
+    `ellama-ask-about', `ellama-code-review', `ellama-write', and
+    `ellama-code-add' now explicitly add region/buffer context as
+    ephemeral for one request.
+  • Add safer region replacement flow for editing commands.
+    `ellama-stream' now accepts `:replace-beg' and `:replace-end' to
+    replace text in place, and restore buffer content on request errors.
+    `ellama-change', `ellama-code-edit', `ellama-code-improve', and
+    `ellama-make-format' now use this path.
+  • Improve request cancellation handling across related buffers.
+    Request state is now tracked as a shared request context, so
+    cancellation through `C-g' works consistently from both main and
+    reasoning buffers and does not affect unrelated active requests.
+  • Fix chat session recovery after buffer revert.  Session resolution
+    now uses stable runtime UIDs and restores session state after
+    `revert-buffer', improving robustness across renames and legacy
+    session files.
+  • Add development helper targets to the Makefile.  New targets: `make
+    format-elisp' for formatting project Elisp files and `make
+    test-detailed' for running tests with detailed ERT failure output.
+
+
+2 Version 1.12.15
 ═════════════════
 
   • Fix compilation warnings. This change resolves compilation warnings
     found during building.
 
 
-2 Version 1.12.14
+3 Version 1.12.14
 ═════════════════
 
   • Add fake streaming helpers and new stream tests. Introduce
@@ -51,25 +76,5 @@
     command execution.
   • Add community prompts tests and refactor download logic. Implemented
     comprehensive unit tests for community prompts, updated Makefile to
-    run the new test, and refactored the prompt download routine in
-    `ellama-community-prompts.el' to simplify directory handling and
-    response processing.
-  • Add transient tests for ellama. Introduce comprehensive tests for
-    Ellama transient features, covering model population, provider
-    construction, provider selection, system and prompt handling,
-    context summary, argument forwarding, and main menu initialization.
-  • Add manual export tests. Add a comprehensive test suite for ellama
-    manual export, verifying that the version macro is included,
-    badge.svg and gif links are stripped, org-export-to-file is called
-    with correct arguments, broken links are bound locally, and an error
-    is raised when the version header is missing.
-  • Split `test-ellama.el'. Move tools and context related test to
-    separated files.
-  • Add skills tests and update Makefile. Implemented a comprehensive
-    test suite for Ellama skills, covering front‑matter parsing,
-    directory scanning, project directory resolution, skill aggregation,
-    and prompt generation.
-  • Add manual export instructions. Add “Export manual” entry to
-    AGENTS.md and a new `manual' target to the Makefile. The target runs
-    `ellama-manual-export'
+    run the
   …  …
