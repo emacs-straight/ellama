@@ -1,4 +1,14 @@
-1 Version 1.12.16
+1 Version 1.12.17
+═════════════════
+
+  • Improved new session handling in `ellama-chat' by refactoring
+    session resolution logic to conditionally create new sessions when
+    the create-session flag is set.
+  • Added test to verify that using the create-session flag forces
+    creation of a new session independent of existing sessions.
+
+
+2 Version 1.12.16
 ═════════════════
 
   • Improve ephemeral context behavior for interactive commands.
@@ -19,18 +29,18 @@
     `revert-buffer', improving robustness across renames and legacy
     session files.
   • Add development helper targets to the Makefile.  New targets: `make
-    format-elisp' for formatting project Elisp files and `make
-    test-detailed' for running tests with detailed ERT failure output.
+      format-elisp' for formatting project Elisp files and `make
+      test-detailed' for running tests with detailed ERT failure output.
 
 
-2 Version 1.12.15
+3 Version 1.12.15
 ═════════════════
 
   • Fix compilation warnings. This change resolves compilation warnings
     found during building.
 
 
-3 Version 1.12.14
+4 Version 1.12.14
 ═════════════════
 
   • Add fake streaming helpers and new stream tests. Introduce
@@ -71,10 +81,4 @@
     directory resolution, ordering of global and local skills, and
     prompt generation for both empty and populated skill lists.
   • Add blueprint tests. Updated the Makefile test target to run the new
-    ellama‑blueprint tests and added tests/test-ellama-blueprint.el
-    which exercises blueprint loading, variable handling, selection, and
-    command execution.
-  • Add community prompts tests and refactor download logic. Implemented
-    comprehensive unit tests for community prompts, updated Makefile to
-    run the
   …  …
