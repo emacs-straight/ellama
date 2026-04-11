@@ -1,4 +1,14 @@
-1 Version 1.12.18
+1 Version 1.13.0
+════════════════
+
+  • Implement DLP (Data Loss Prevention) layer.
+  • Add prompt‑injection detection and configurable output‑warning
+    handling.
+  • Add SRT sandbox integration to ellama-tools.
+  • Remove apply_patch tool.
+
+
+2 Version 1.12.18
 ═════════════════
 
   • Add refill-readme target. Updated AGENTS.md to include a new “Refill
@@ -14,7 +24,7 @@
   • Update readme formatting. Minor formatting tweaks.
 
 
-2 Version 1.12.17
+3 Version 1.12.17
 ═════════════════
 
   • Improved new session handling in `ellama-chat' by refactoring
@@ -24,7 +34,7 @@
     creation of a new session independent of existing sessions.
 
 
-3 Version 1.12.16
+4 Version 1.12.16
 ═════════════════
 
   • Improve ephemeral context behavior for interactive commands.
@@ -49,14 +59,14 @@
       test-detailed' for running tests with detailed ERT failure output.
 
 
-4 Version 1.12.15
+5 Version 1.12.15
 ═════════════════
 
   • Fix compilation warnings. This change resolves compilation warnings
     found during building.
 
 
-5 Version 1.12.14
+6 Version 1.12.14
 ═════════════════
 
   • Add fake streaming helpers and new stream tests. Introduce
@@ -82,9 +92,5 @@
     edit‑file replacement at file start, confirmation caching, reply,
     and denial flows, file read/write/append/prepend/directory
     tree/move/line range/patch application validations, role and
-    provider resolution logic, subagent loop step limits, task tool role
-    fallback and priority handling.
-  • Add test for context prompt clearing ephemerals. Introduce a new ERT
-    test `test-ellama-context-prompt-with-context-clears-ephemeral' that
-    verifies
+    provider resolution logic,
   …  …
