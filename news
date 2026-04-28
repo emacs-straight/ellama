@@ -1,4 +1,75 @@
-1 Version 1.13.0
+1 Version 1.14.2
+════════════════
+
+  • Add project-local skill pointers for changelog and commit-message
+    workflows.  This makes repository-specific Codex skills discoverable
+    from `.codex/skills'.
+  • Add a `commit-message' skill for concise commit message generation
+    from diffs.
+  • Update agent instructions to document the project commit workflow.
+    The workflow now covers pre-commit checks, branch creation from
+    `main', iterative check/fix/commit/push cycles, documentation
+    updates, changelog generation, version bumps, and when to ask for
+    clarification.
+
+
+2 Version 1.14.1
+════════════════
+
+  • Refactor transient model handling and provider
+    construction. Generalize transient model handling to support
+    multiple provider types beyond Ollama, including OpenAI-compatible
+    providers.
+  • Implement `ellama-transient-set-model' and
+    `ellama-transient-set-url' for broader provider support.
+  • Add `ellama-transient-reset-model-fields' to reset model-specific
+    parameters.
+  • Refactor `ellama-construct-provider-from-transient' to dynamically
+    handle different provider types.
+  • Improve transient descriptions to dynamically show if values are set
+    to defaults.
+  • Add logic to filter transient menu items based on the selected
+    provider type.
+  • Add support for loading models and filling settings from existing
+    provider defaults and current sessions.
+  • Update tests to cover various provider types and edge cases.
+  • Refactor provider parameter extraction. Introduced
+    `ellama-transient--provider-context-length' to handle context length
+    retrieval.
+  • Removed hardcoded default values for temperature and context length,
+    ensuring parameters are directly retrieved from the provider.
+  • Update documentation.
+
+
+3 Version 1.14.0
+════════════════
+
+  • Implement automatic session context compaction. This feature
+    automatically summarizes chat history when it reaches a certain
+    token threshold to manage context window limits. It includes
+    customization variables for threshold, target size, provider, and
+    turn retention.
+  • Refactor session compaction to be asynchronous using
+    `llm-chat-async`. This introduces helper functions to manage token
+    counts, apply compaction results, and handle asynchronous errors and
+    state changes.
+  • Add a compaction minor mode (`ellama-compaction-mode`) for visual
+    feedback in the mode line when session compaction is in progress.
+  • Refactor session compaction to use synthetic interactions for
+    summaries. Instead of appending the summary to the prompt context,
+    it is now represented as a synthetic assistant interaction. This
+    ensures the original system context is preserved and subsequent
+    compactions correctly replace the previous summary.
+  • Improve session compaction system interaction handling. Added
+    functions to identify, drop, and extract system context from leading
+    system interactions, ensuring they are correctly preserved during
+    the compaction process.
+  • Add session compaction options to the transient menu, including
+    "Compact Current Session" and "Compact Session" commands.
+  • Fix docstring warnings and reformat code.
+
+
+4 Version 1.13.0
 ════════════════
 
   • Implement DLP (Data Loss Prevention) layer.
@@ -8,7 +79,7 @@
   • Remove apply_patch tool.
 
 
-2 Version 1.12.18
+5 Version 1.12.18
 ═════════════════
 
   • Add refill-readme target. Updated AGENTS.md to include a new “Refill
@@ -24,73 +95,9 @@
   • Update readme formatting. Minor formatting tweaks.
 
 
-3 Version 1.12.17
+6 Version 1.12.17
 ═════════════════
 
   • Improved new session handling in `ellama-chat' by refactoring
-    session resolution logic to conditionally create new sessions when
-    the create-session flag is set.
-  • Added test to verify that using the create-session flag forces
-    creation of a new session independent of existing sessions.
-
-
-4 Version 1.12.16
-═════════════════
-
-  • Improve ephemeral context behavior for interactive commands.
-    `ellama-ask-about', `ellama-code-review', `ellama-write', and
-    `ellama-code-add' now explicitly add region/buffer context as
-    ephemeral for one request.
-  • Add safer region replacement flow for editing commands.
-    `ellama-stream' now accepts `:replace-beg' and `:replace-end' to
-    replace text in place, and restore buffer content on request errors.
-    `ellama-change', `ellama-code-edit', `ellama-code-improve', and
-    `ellama-make-format' now use this path.
-  • Improve request cancellation handling across related buffers.
-    Request state is now tracked as a shared request context, so
-    cancellation through `C-g' works consistently from both main and
-    reasoning buffers and does not affect unrelated active requests.
-  • Fix chat session recovery after buffer revert.  Session resolution
-    now uses stable runtime UIDs and restores session state after
-    `revert-buffer', improving robustness across renames and legacy
-    session files.
-  • Add development helper targets to the Makefile.  New targets: `make
-      format-elisp' for formatting project Elisp files and `make
-      test-detailed' for running tests with detailed ERT failure output.
-
-
-5 Version 1.12.15
-═════════════════
-
-  • Fix compilation warnings. This change resolves compilation warnings
-    found during building.
-
-
-6 Version 1.12.14
-═════════════════
-
-  • Add fake streaming helpers and new stream tests. Introduce
-    `ellama-test--fake-stream-partials' and
-    `ellama-test--run-with-fake-streaming' to simplify test setup for
-    streaming LLM responses. Refactor existing tests to use these
-    helpers. Add tests for `ellama-stream' output to a log buffer and
-    for retry logic when a fake tool‑call error is raised. These changes
-    improve test readability and cover new streaming scenarios.
-  • Add tests for ellama helper functions and error handling. Introduce
-    unit tests covering `ellama-remove-reasoning', mode-derived helpers,
-    tool call error detection, error handler retry logic on tool errors,
-    error handling for non-tool errors, chat-done callback behavior, and
-    setup to use local ellama-tools. These tests validate correct
-    behavior and edge cases.
-  • Correct tool argument handling, enable‑by‑name, and edit‑file
-    logic. Update `ellama-tools-wrap-with-confirm' to use each
-    argument’s plist for type resolution, prevent type removing. Guard
-    `ellama-tools-enable-by-name-tool' against adding a nil tool when
-    the name is missing. Simplify `ellama-tools-edit-file-tool' to use
-    replace-match for robust replacement. Add extensive ERT tests
-    covering argument type preservation, enable‑by‑name nil‑check,
-    edit‑file replacement at file start, confirmation caching, reply,
-    and denial flows, file read/write/append/prepend/directory
-    tree/move/line range/patch application validations, role and
-    provider resolution logic,
+    session
   …  …

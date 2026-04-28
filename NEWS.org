@@ -1,3 +1,53 @@
+* Version 1.14.2
+- Add project-local skill pointers for changelog and commit-message workflows.
+  This makes repository-specific Codex skills discoverable from ~.codex/skills~.
+- Add a ~commit-message~ skill for concise commit message generation from diffs.
+- Update agent instructions to document the project commit workflow.  The
+  workflow now covers pre-commit checks, branch creation from ~main~, iterative
+  check/fix/commit/push cycles, documentation updates, changelog generation,
+  version bumps, and when to ask for clarification.
+* Version 1.14.1
+- Refactor transient model handling and provider construction. Generalize
+  transient model handling to support multiple provider types beyond Ollama,
+  including OpenAI-compatible providers.
+- Implement ~ellama-transient-set-model~ and ~ellama-transient-set-url~ for
+  broader provider support.
+- Add ~ellama-transient-reset-model-fields~ to reset model-specific parameters.
+- Refactor ~ellama-construct-provider-from-transient~ to dynamically handle
+  different provider types.
+- Improve transient descriptions to dynamically show if values are set to
+  defaults.
+- Add logic to filter transient menu items based on the selected provider type.
+- Add support for loading models and filling settings from existing provider
+  defaults and current sessions.
+- Update tests to cover various provider types and edge cases.
+- Refactor provider parameter extraction. Introduced
+  ~ellama-transient--provider-context-length~ to handle context length
+  retrieval.
+- Removed hardcoded default values for temperature and context length, ensuring
+  parameters are directly retrieved from the provider.
+- Update documentation.
+* Version 1.14.0
+- Implement automatic session context compaction. This feature automatically
+  summarizes chat history when it reaches a certain token threshold to manage
+  context window limits. It includes customization variables for threshold,
+  target size, provider, and turn retention.
+- Refactor session compaction to be asynchronous using `llm-chat-async`. This
+  introduces helper functions to manage token counts, apply compaction results,
+  and handle asynchronous errors and state changes.
+- Add a compaction minor mode (`ellama-compaction-mode`) for visual feedback in
+  the mode line when session compaction is in progress.
+- Refactor session compaction to use synthetic interactions for
+  summaries. Instead of appending the summary to the prompt context, it is now
+  represented as a synthetic assistant interaction. This ensures the original
+  system context is preserved and subsequent compactions correctly replace the
+  previous summary.
+- Improve session compaction system interaction handling. Added functions to
+  identify, drop, and extract system context from leading system interactions,
+  ensuring they are correctly preserved during the compaction process.
+- Add session compaction options to the transient menu, including "Compact
+  Current Session" and "Compact Session" commands.
+- Fix docstring warnings and reformat code.
 * Version 1.13.0
 - Implement DLP (Data Loss Prevention) layer.
 - Add prompt‑injection detection and configurable output‑warning handling.
