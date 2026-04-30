@@ -6,7 +6,7 @@
 ;; URL: http://github.com/s-kostyaev/ellama
 ;; Keywords: help local tools
 ;; Package-Requires: ((emacs "28.1") (llm "0.24.0") (plz "0.8") (transient "0.7") (compat "29.1") (yaml "1.2.3"))
-;; Version: 1.14.2
+;; Version: 1.16.3
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Created: 8th Oct 2023
 
@@ -36,12 +36,16 @@
 ;;; Code:
 
 (require 'eieio)
+(require 'cl-lib)
 (require 'llm)
 (require 'llm-provider-utils)
+(require 'json)
 (require 'compat)
 (eval-when-compile (require 'rx))
 (require 'ellama-tools)
 (require 'ellama-skills)
+
+(defvar ellama-tools--current-session)
 
 (defgroup ellama nil
   "Tool for interacting with LLMs."
@@ -131,6 +135,11 @@ When nil, use `ellama-summarization-provider', then the session provider."
   "LLM provider for coding tasks."
   :type '(sexp :validate llm-standard-provider-p))
 
+(defcustom ellama-image-file-extensions '("png" "jpg" "jpeg" "webp" "gif")
+  "File extensions supported for image input.
+SVG is intentionally out of scope for the initial image input support."
+  :type '(repeat string))
+
 (defcustom ellama-completion-provider nil
   "LLM provider for completions."
   :type '(sexp :validate llm-standard-provider-p))
@@ -185,6 +194,7 @@ When nil, use `ellama-summarization-provider', then the session provider."
     ;; ask
     (define-key map (kbd "a a") 'ellama-ask-about)
     (define-key map (kbd "a i") 'ellama-chat)
+    (define-key map (kbd "a I") 'ellama-ask-image)
     (define-key map (kbd "a l") 'ellama-ask-line)
     (define-key map (kbd "a s") 'ellama-ask-selection)
     ;; text
@@ -200,6 +210,7 @@ When nil, use `ellama-summarization-provider', then the session provider."
     (define-key map (kbd "x b") 'ellama-context-add-buffer)
     (define-key map (kbd "x d") 'ellama-context-add-directory)
     (define-key map (kbd "x f") 'ellama-context-add-file)
+    (define-key map (kbd "x I") 'ellama-context-add-image)
     (define-key map (kbd "x s") 'ellama-context-add-selection)
     (define-key map (kbd "x i") 'ellama-context-add-info-node)
     (define-key map (kbd "x m") 'ellama-context-manage)
@@ -521,6 +532,12 @@ It should be a function with single argument generated text string."
 (defcustom ellama-reasoning-display-action-function nil
   "Display action function for reasoning."
   :type 'function)
+
+(defcustom ellama-display-session-buffer-on-generation nil
+  "Display session buffer when generation starts.
+This applies to any `ellama-stream' call associated with a session, including
+sub-agent sessions started by tools."
+  :type 'boolean)
 
 (defcustom ellama-show-reasoning t
   "Show reasoning in separate buffer if enabled."
@@ -943,6 +960,132 @@ CONTEXT will be ignored.  Use global context instead.
   (or (ellama--session-extra-get session :token-count)
       (ellama--session-extra-get session :auto-compact-last-token-count)))
 
+(defun ellama-image-file-p (file-name)
+  "Return non-nil when FILE-NAME is a supported image file."
+  (and (stringp file-name)
+       (file-exists-p file-name)
+       (let ((ext (file-name-extension file-name)))
+         (and ext
+              (member (downcase ext) ellama-image-file-extensions)))))
+
+(defun ellama--image-mime-type (file-name)
+  "Return image MIME type for FILE-NAME, or nil when unsupported."
+  (pcase (downcase (or (file-name-extension file-name) ""))
+    ("png" "image/png")
+    ((or "jpg" "jpeg") "image/jpeg")
+    ("webp" "image/webp")
+    ("gif" "image/gif")
+    (_ nil)))
+
+(defun ellama--file-size (file-name)
+  "Return FILE-NAME size in bytes."
+  (file-attribute-size (file-attributes file-name)))
+
+(defun ellama--file-to-llm-media (file-name)
+  "Return `llm-media' for image FILE-NAME."
+  (let ((mime-type (ellama--image-mime-type file-name)))
+    (unless (and mime-type (ellama-image-file-p file-name))
+      (error "Unsupported image file: %s" file-name))
+    (make-llm-media
+     :mime-type mime-type
+     :data (with-temp-buffer
+             (set-buffer-multibyte nil)
+             (insert-file-contents-literally file-name)
+             (buffer-string)))))
+
+(defun ellama--provider-supports-image-input-p (provider)
+  "Return non-nil when PROVIDER supports image input."
+  (condition-case nil
+      (memq 'image-input (llm-capabilities provider))
+    (error nil)))
+
+(defun ellama--normalize-image-files (images)
+  "Normalize IMAGES argument to a list of file names."
+  (cond
+   ((null images) nil)
+   ((stringp images) (list images))
+   ((listp images) images)
+   (t (error "Images must be a file name or list of file names"))))
+
+(defun ellama--validate-image-input (provider image-files)
+  "Validate IMAGE-FILES for PROVIDER."
+  (when image-files
+    (unless (ellama--provider-supports-image-input-p provider)
+      (error "Provider %s does not support image input"
+             (if provider (llm-name provider) "unknown")))
+    (dolist (file-name image-files)
+      (unless (ellama-image-file-p file-name)
+        (if (string= (downcase (or (file-name-extension file-name) "")) "svg")
+            (error "SVG image input is not supported yet: %s" file-name)
+          (error "Unsupported image file: %s" file-name))))))
+
+(defun ellama--prompt-content-with-images (prompt image-files)
+  "Return PROMPT content with IMAGE-FILES attached as media."
+  (if (not image-files)
+      prompt
+    (apply #'llm-make-multipart
+           prompt
+           (mapcar #'ellama--file-to-llm-media image-files))))
+
+(defun ellama--image-link-for-mode (file-name mode)
+  "Return display link for image FILE-NAME in MODE."
+  (let ((label (file-name-nondirectory file-name)))
+    (if (eq mode 'org-mode)
+        (format "[[file:%s][%s]]" file-name label)
+      (format "[%s](<%s>)" label file-name))))
+
+(defun ellama--prompt-display-with-images (prompt image-files mode)
+  "Return display PROMPT with IMAGE-FILES formatted for MODE."
+  (if (not image-files)
+      prompt
+    (concat prompt
+            "\n\nImages:\n"
+            (string-join
+             (mapcar (lambda (file-name)
+                       (ellama--image-link-for-mode file-name mode))
+                     image-files)
+             "\n"))))
+
+(defun ellama--media-placeholder (media &optional file-name)
+  "Return text placeholder for MEDIA and optional FILE-NAME."
+  (format "[image: %s, %d bytes%s]"
+          (llm-media-mime-type media)
+          (length (llm-media-data media))
+          (if file-name
+              (format ", %s" file-name)
+            "")))
+
+(defun ellama--session-add-pending-tool-media (session file-name)
+  "Add FILE-NAME to SESSION pending tool media."
+  (let* ((path (expand-file-name file-name))
+         (item (list :file path
+                     :mime-type (ellama--image-mime-type path)
+                     :size (ellama--file-size path)))
+         (pending (copy-sequence
+                   (or (ellama--session-extra-get session :pending-tool-media)
+                       nil))))
+    (ellama--session-extra-put
+     session :pending-tool-media (append pending (list item)))
+    item))
+
+(defun ellama--prompt-attach-pending-tool-media (session prompt provider)
+  "Attach pending tool media from SESSION to PROMPT for PROVIDER."
+  (when-let* (((ellama-session-p session))
+              (pending (ellama--session-extra-get
+                        session :pending-tool-media)))
+    (ellama--validate-image-input
+     provider
+     (mapcar (lambda (item) (plist-get item :file)) pending))
+    (llm-chat-prompt-append-response
+     prompt
+     (apply #'llm-make-multipart
+            "Images read by tools are attached for visual analysis."
+            (mapcar (lambda (item)
+                      (ellama--file-to-llm-media
+                       (plist-get item :file)))
+                    pending)))
+    (ellama--session-extra-put session :pending-tool-media nil)))
+
 (defun ellama--session-compaction-buffer (session buffer)
   "Return live BUFFER for SESSION compaction status."
   (or (and (buffer-live-p buffer) buffer)
@@ -1033,7 +1176,10 @@ CONTEXT will be ignored.  Use global context instead.
      (mapcar (lambda (part)
                (if (stringp part)
                    part
-                 (format "%S" part)))
+                 (if (and (fboundp 'llm-media-p)
+                          (llm-media-p part))
+                     (ellama--media-placeholder part)
+                   (format "%S" part))))
              (llm-multipart-parts content))
      "\n"))
    (t (format "%S" content))))
@@ -1470,6 +1616,18 @@ If ACTIVATE is non-nil, set global active session selection."
       (when-let ((session (ellama--active-session-by-id id)))
         (gethash (ellama--session-uid session) ellama--active-sessions))))
 
+(defun ellama--display-session-buffer-on-generation (session buffer)
+  "Display SESSION buffer for generation started in BUFFER when enabled."
+  (when (and ellama-display-session-buffer-on-generation
+             (ellama-session-p session))
+    (when-let ((session-buffer (or (ellama-get-session-buffer
+                                    (ellama--session-uid session))
+                                   (get-buffer buffer))))
+      (display-buffer
+       session-buffer
+       (when ellama-chat-display-action-function
+         `((ignore . (,ellama-chat-display-action-function))))))))
+
 (defconst ellama--forbidden-file-name-characters (rx (any "/\\?%*:|\"<>.;=")))
 
 (defun ellama--fix-file-name (name)
@@ -1632,6 +1790,7 @@ REQUEST-CONTEXT is a request context."
 
 (defun ellama--deactivate-current-request (&optional request-context)
   "Deactivate current request state from REQUEST-CONTEXT."
+  (setq ellama-tools--current-session nil)
   (let* ((ctx (or request-context ellama--request-context))
          (buffers (if ctx
                       (ellama--request-context-buffers ctx)
@@ -1725,6 +1884,50 @@ REQUEST-CONTEXT is a request context."
                      (concat "." ext))))))
     translation-file-name))
 
+(defun ellama--session-save-content (content)
+  "Return CONTENT safe for session persistence."
+  (cond
+   ((and (fboundp 'llm-multipart-p)
+         (llm-multipart-p content))
+    (string-join
+     (mapcar (lambda (part)
+               (cond
+                ((stringp part) part)
+                ((and (fboundp 'llm-media-p)
+                      (llm-media-p part))
+                 (ellama--media-placeholder part))
+                (t (format "%S" part))))
+             (llm-multipart-parts content))
+     "\n"))
+   (t content)))
+
+(defun ellama--session-save-prompt (prompt)
+  "Return copy of PROMPT safe for session persistence."
+  (if (not (llm-chat-prompt-p prompt))
+      prompt
+    (let ((prompt-copy (copy-sequence prompt)))
+      (setf (llm-chat-prompt-interactions prompt-copy)
+            (mapcar (lambda (interaction)
+                      (let ((copy (copy-sequence interaction)))
+                        (setf (llm-chat-prompt-interaction-content copy)
+                              (ellama--session-save-content
+                               (llm-chat-prompt-interaction-content copy)))
+                        copy))
+                    (llm-chat-prompt-interactions prompt)))
+      prompt-copy)))
+
+(defun ellama--session-for-save (session)
+  "Return copy of SESSION safe for persistence."
+  (let ((session-copy (copy-sequence session))
+        (extra (if (plistp (ellama-session-extra session))
+                   (copy-sequence (ellama-session-extra session))
+                 nil)))
+    (setf (ellama-session-prompt session-copy)
+          (ellama--session-save-prompt (ellama-session-prompt session)))
+    (setf (ellama-session-extra session-copy)
+          (plist-put extra :pending-tool-media nil))
+    session-copy))
+
 (defun ellama--save-session ()
   "Save current ellama session."
   (when ellama--current-session
@@ -1732,7 +1935,27 @@ REQUEST-CONTEXT is a request context."
            (file-name (or (ellama-session-file session) buffer-file-name))
            (session-file-name (ellama--get-session-file-name file-name)))
       (with-temp-file session-file-name
-        (insert (prin1-to-string session))))))
+        (insert (prin1-to-string (ellama--session-for-save session)))))))
+
+(defun ellama--session-file-candidates (dir)
+  "Return session file candidates in DIR, newest first."
+  (mapcar
+   #'file-name-nondirectory
+   (sort
+    (directory-files dir t "^[^\\.].*" t)
+    (lambda (a b)
+      (time-less-p
+       (file-attribute-modification-time (file-attributes b))
+       (file-attribute-modification-time (file-attributes a)))))))
+
+(defun ellama--presorted-completion-table (candidates)
+  "Return completion table for presorted CANDIDATES."
+  (lambda (string pred action)
+    (if (eq action 'metadata)
+        '(metadata
+          (display-sort-function . identity)
+          (cycle-sort-function . identity))
+      (complete-with-action action candidates string pred))))
 
 ;;;###autoload
 (defun ellama-load-session ()
@@ -1747,7 +1970,8 @@ REQUEST-CONTEXT is a request context."
                           dir
                           (completing-read
                            "Select session to load: "
-                           (directory-files dir nil "^[^\.].*"))))
+                           (ellama--presorted-completion-table
+                            (ellama--session-file-candidates dir)))))
               (session-file-name (ellama--get-session-file-name file-name))
               ((file-exists-p session-file-name))
               (buffer (find-file-noselect file-name)))
@@ -2204,6 +2428,111 @@ REASONING-BUFFER is a buffer for reasoning."
        (format "%s" (or msg "Unknown tool call error")))
      'system)))
 
+(defun ellama--json-safe-string (string)
+  "Return STRING as multibyte text safe for JSON serialization."
+  (let* ((decoded (if (multibyte-string-p string)
+                      string
+                    (decode-coding-string string 'utf-8-unix)))
+         (chars (string-to-list decoded)))
+    (if (cl-some (lambda (char) (> char #x10ffff)) chars)
+        (apply #'string
+               (mapcar (lambda (char)
+                         (if (> char #x10ffff) #xfffd char))
+                       chars))
+      decoded)))
+
+(defun ellama--json-safe-value (value)
+  "Return VALUE with strings safe for JSON serialization."
+  (cond
+   ((stringp value)
+    (ellama--json-safe-string value))
+   ((vectorp value)
+    (vconcat (mapcar #'ellama--json-safe-value value)))
+   ((consp value)
+    (mapcar (lambda (item)
+              (if (consp item)
+                  (cons (ellama--json-safe-value (car item))
+                        (ellama--json-safe-value (cdr item)))
+                (ellama--json-safe-value item)))
+            value))
+   (t value)))
+
+(defun ellama--sanitize-provider-chat-request (request)
+  "Return provider chat REQUEST with JSON-safe strings."
+  (ellama--json-safe-value request))
+
+(advice-remove 'llm-provider-chat-request
+               #'ellama--sanitize-provider-chat-request)
+(advice-add 'llm-provider-chat-request
+            :filter-return #'ellama--sanitize-provider-chat-request)
+
+(defun ellama--collect-openai-streaming-tool-uses (data)
+  "Return parsed OpenAI streaming tool-call chunks from DATA."
+  (let* ((calls (append data nil))
+         (max-index
+          (cl-loop for call in calls
+                   for index = (assoc-default 'index call)
+                   when index maximize index)))
+    (when max-index
+      (let ((cvec (make-vector (1+ max-index) nil)))
+        (dotimes (i (length cvec))
+          (setf (aref cvec i) (make-llm-provider-utils-tool-use)))
+        (dolist (call calls)
+          (let* ((index (assoc-default 'index call))
+                 (id (assoc-default 'id call))
+                 (function (assoc-default 'function call))
+                 (name (assoc-default 'name function))
+                 (arguments (assoc-default 'arguments function)))
+            (when index
+              (when id
+                (setf (llm-provider-utils-tool-use-id (aref cvec index)) id))
+              (when name
+                (setf (llm-provider-utils-tool-use-name (aref cvec index))
+                      name))
+              (setf (llm-provider-utils-tool-use-args (aref cvec index))
+                    (concat
+                     (llm-provider-utils-tool-use-args (aref cvec index))
+                     (or arguments ""))))))
+        (cl-loop for call across cvec
+                 do (setf (llm-provider-utils-tool-use-args call)
+                          (json-parse-string
+                           (let ((args
+                                  (llm-provider-utils-tool-use-args call)))
+                             (if (and args (> (length args) 0)) args "{}"))
+                           :object-type 'alist))
+                 finally return (append cvec nil))))))
+
+(advice-remove 'llm-provider-utils-openai-collect-streaming-tool-uses
+               #'ellama--collect-openai-streaming-tool-uses)
+(advice-add 'llm-provider-utils-openai-collect-streaming-tool-uses
+            :override #'ellama--collect-openai-streaming-tool-uses)
+
+(defun ellama--normalize-tool-use-args (args)
+  "Normalize tool ARGS for provider request serialization."
+  (if (stringp args)
+      (let ((decoded (ellama--json-safe-string args)))
+        (condition-case nil
+            (ellama--json-safe-value
+             (json-parse-string
+              (if (= (length decoded) 0) "{}" decoded)
+              :object-type 'alist
+              :array-type 'list))
+          (error decoded)))
+    (ellama--json-safe-value args)))
+
+(defun ellama--normalize-prompt-tool-use-args (prompt)
+  "Normalize tool-use arguments in PROMPT history."
+  (when (llm-chat-prompt-p prompt)
+    (dolist (interaction (llm-chat-prompt-interactions prompt))
+      (let ((content (llm-chat-prompt-interaction-content interaction)))
+        (when (and (consp content)
+                   (llm-provider-utils-tool-use-p (car content)))
+          (dolist (tool-use content)
+            (setf (llm-provider-utils-tool-use-args tool-use)
+                  (ellama--normalize-tool-use-args
+                   (llm-provider-utils-tool-use-args tool-use))))))))
+  prompt)
+
 (defun ellama--error-handler (buffer errcb &optional prompt
                                      retry-fn request-context)
   "Error handler function.
@@ -2288,6 +2617,12 @@ inserted into the BUFFER."
                             request-context))
                           (request
                             (with-current-buffer buffer
+                              (setq ellama-tools--current-session
+                                    ellama--current-session)
+                              (ellama--prompt-attach-pending-tool-media
+                               ellama--current-session llm-prompt provider)
+                              (ellama--normalize-prompt-tool-use-args
+                               llm-prompt)
                               (if async
                                   (llm-chat-async
                                    provider
@@ -2375,6 +2710,8 @@ file by default.
 
 :system STR -- send STR to model as system message.
 
+:images FILES -- attach image FILES to the prompt when provider supports it.
+
 :on-error ON-ERROR -- ON-ERROR a function that's called with an error message on
 failure (with BUFFER current).
 
@@ -2382,6 +2719,7 @@ failure (with BUFFER current).
  the full response text when the request completes (with BUFFER current)."
   (declare-function spinner-start "ext:spinner")
   (declare-function spinner-stop "ext:spinner")
+  (declare-function ellama-context-media "ellama-context")
   (declare-function ellama-context-prompt-with-context "ellama-context")
   (let* ((buffer (or (plist-get args :buffer)
                      (current-buffer)))
@@ -2407,7 +2745,18 @@ failure (with BUFFER current).
                     (lambda (msg)
                       (error "Error calling the LLM: %s" msg))))
          (donecb (or (plist-get args :on-done) #'ignore))
+         (explicit-images
+          (ellama--normalize-image-files
+           (or (plist-get args :images)
+               (plist-get args :image))))
+         (context-images
+          (when (fboundp 'ellama-context-media)
+            (ellama-context-media)))
+         (image-files (delete-dups (append explicit-images context-images)))
+         (_ (ellama--validate-image-input provider image-files))
          (prompt-with-ctx (ellama-context-prompt-with-context prompt))
+         (prompt-content
+          (ellama--prompt-content-with-images prompt-with-ctx image-files))
          (system (ellama-get-system-message (plist-get args :system)))
          (session-tools (and session
                              (ellama-session-extra session)
@@ -2420,21 +2769,22 @@ failure (with BUFFER current).
                              (progn
                                (llm-chat-prompt-append-response
                                 (ellama-session-prompt session)
-                                prompt-with-ctx)
+                                prompt-content)
                                (setf (llm-chat-prompt-tools (ellama-session-prompt session))
                                      tools)
                                ;; System message is part of prompt context and should not be
                                ;; appended on each interaction.
                                (ellama-session-prompt session))
                            (setf (ellama-session-prompt session)
-                                 (llm-make-chat-prompt prompt-with-ctx :context system
+                                 (llm-make-chat-prompt prompt-content :context system
                                                        :tools tools)))
-                       (llm-make-chat-prompt prompt-with-ctx :context system
+                       (llm-make-chat-prompt prompt-content :context system
                                              :tools tools))))
     (when (not (eq (null replace-beg) (null replace-end)))
       (error "Specify both :replace-beg and :replace-end"))
     (with-current-buffer reasoning-buffer
       (org-mode))
+    (ellama--display-session-buffer-on-generation session buffer)
     (with-current-buffer buffer
       (let ((request-generation 0)
             (request-started nil)
@@ -2465,6 +2815,8 @@ failure (with BUFFER current).
                         #'start-request
                         request-context))
                       request)
+                 (setq ellama-tools--current-session session)
+                 (ellama--normalize-prompt-tool-use-args llm-prompt)
                  (when (not request-started)
                    (setq request-started t)
                    (setq ellama--change-group (prepare-change-group))
@@ -2716,8 +3068,10 @@ Will call `ellama-chat-done-callback' and ON-DONE on TEXT."
                        :filter (when (derived-mode-p 'org-mode)
                                  #'ellama--translate-markdown-to-org-filter))))))
 
-(defun ellama--call-llm-with-translated-prompt (buffer session translation-buffer)
-  "Call LLM with translated text in BUFFER with SESSION from TRANSLATION-BUFFER."
+(defun ellama--call-llm-with-translated-prompt
+    (buffer session translation-buffer &optional images)
+  "Call LLM with translated text in BUFFER with SESSION from TRANSLATION-BUFFER.
+IMAGES are attached to the translated prompt."
   (declare-function ellama-context-format "ellama-context")
   (lambda (result)
     (ellama-chat-done result)
@@ -2735,12 +3089,15 @@ Will call `ellama-chat-done-callback' and ON-DONE on TEXT."
                 (ellama-get-nick-prefix-for-mode) " " ellama-assistant-nick ":\n")
         (ellama-stream result
                        :session session
+                       :images images
                        :on-done (ellama--translate-generated-text-on-done translation-buffer)
                        :filter (when (derived-mode-p 'org-mode)
                                  #'ellama--translate-markdown-to-org-filter))))))
 
-(defun ellama--translate-interaction (prompt translation-buffer buffer session)
-  "Translate chat PROMPT in TRANSLATION-BUFFER for BUFFER with SESSION."
+(defun ellama--translate-interaction
+    (prompt translation-buffer buffer session &optional images)
+  "Translate chat PROMPT in TRANSLATION-BUFFER for BUFFER with SESSION.
+IMAGES are attached to the final translated request."
   (display-buffer translation-buffer (when ellama-chat-display-action-function
                                        `((ignore . (,ellama-chat-display-action-function)))))
   (with-current-buffer translation-buffer
@@ -2759,7 +3116,54 @@ Will call `ellama-chat-done-callback' and ON-DONE on TEXT."
                      :filter (when (derived-mode-p 'org-mode)
                                #'ellama--translate-markdown-to-org-filter)
                      :on-done
-                     (ellama--call-llm-with-translated-prompt buffer session translation-buffer)))))
+                     (ellama--call-llm-with-translated-prompt
+                      buffer session translation-buffer images)))))
+
+;;;###autoload
+(defun ellama-ask-image (image prompt &optional create-session &rest args)
+  "Ask ellama PROMPT about IMAGE using ephemeral context.
+If CREATE-SESSION set, create a new session."
+  (interactive
+   (list (read-file-name "Image: " nil nil t)
+         (read-string "Ask ellama: ")
+         current-prefix-arg))
+  (declare-function ellama-context-add-image-file "ellama-context")
+  (require 'ellama-context)
+  (ellama-context-add-image-file image t)
+  (ellama-chat
+   prompt
+   create-session
+   :ephemeral (plist-get args :ephemeral)))
+
+;;;###autoload
+(defun ellama-chat-with-image (image prompt &optional create-session &rest args)
+  "Send PROMPT with IMAGE to ellama chat.
+If CREATE-SESSION set, create a new session."
+  (interactive
+   (list (read-file-name "Image: " nil nil t)
+         (read-string "Ask ellama: ")
+         current-prefix-arg))
+  (apply #'ellama-ask-image image prompt create-session args))
+
+;;;###autoload
+(defun ellama-chat-with-images (images prompt &optional create-session &rest args)
+  "Send PROMPT with IMAGES to ellama chat.
+If CREATE-SESSION set, create a new session."
+  (interactive
+   (let ((files (list (read-file-name "Image: " nil nil t))))
+     (while (y-or-n-p "Add another image? ")
+       (push (read-file-name "Image: " nil nil t) files))
+     (list (nreverse files)
+           (read-string "Ask ellama: ")
+           current-prefix-arg)))
+  (declare-function ellama-context-add-image-file "ellama-context")
+  (require 'ellama-context)
+  (dolist (image images)
+    (ellama-context-add-image-file image t))
+  (ellama-chat
+   prompt
+   create-session
+   :ephemeral (plist-get args :ephemeral)))
 
 ;;;###autoload
 (defun ellama-chat (prompt &optional create-session &rest args)
@@ -2776,6 +3180,8 @@ ARGS contains keys for fine control.
 
 :system STR -- send STR to model as system message.
 
+:images FILES -- attach image FILES to the prompt when provider supports it.
+
 :ephemeral BOOL -- create an ephemeral session if set.
 
 :on-done ON-DONE -- ON-DONE a function that's called with
@@ -2788,6 +3194,9 @@ the full response text when the request completes (with BUFFER current)."
          (variants (mapcar #'car providers))
          (system (plist-get args :system))
          (donecb (plist-get args :on-done))
+         (images (ellama--normalize-image-files
+                  (or (plist-get args :images)
+                      (plist-get args :image))))
          (provider (if current-prefix-arg
                        (eval (alist-get
                               (completing-read "Select model: " variants)
@@ -2795,6 +3204,11 @@ the full response text when the request completes (with BUFFER current)."
                      (or (plist-get args :provider)
                          ellama-provider
                          (ellama-get-first-ollama-chat-model))))
+         (context-images
+          (when (fboundp 'ellama-context-media)
+            (ellama-context-media)))
+         (_ (ellama--validate-image-input
+             provider (delete-dups (append images context-images))))
          (ephemeral (plist-get args :ephemeral))
          (explicit-session-arg (plist-get args :session))
          (explicit-session-id (plist-get args :session-id))
@@ -2847,25 +3261,44 @@ the full response text when the request completes (with BUFFER current)."
                        (member #'ellama-chat-send-last-message org-ctrl-c-ctrl-c-hook))))
         (add-hook 'org-ctrl-c-ctrl-c-hook #'ellama-chat-send-last-message 10 t)))
     (if ellama-chat-translation-enabled
-        (ellama--translate-interaction prompt translation-buffer buffer session)
-      (display-buffer buffer (when ellama-chat-display-action-function
-                               `((ignore . (,ellama-chat-display-action-function)))))
+        (ellama--translate-interaction
+         prompt translation-buffer buffer session images)
+      (display-buffer
+       buffer
+       (when ellama-chat-display-action-function
+         `((ignore . (,ellama-chat-display-action-function)))))
       (with-current-buffer buffer
         (save-excursion
           (goto-char (point-max))
-          (if (equal (point-min) (point-max)) ;; empty buffer
-              (insert (ellama-get-nick-prefix-for-mode) " " ellama-user-nick ":\n"
-                      (ellama-context-format session) (ellama--fill-long-lines prompt) "\n\n"
-                      (ellama-get-nick-prefix-for-mode) " " ellama-assistant-nick ":\n")
-            (insert (ellama-context-format session) (ellama--fill-long-lines prompt) "\n\n"
-                    (ellama-get-nick-prefix-for-mode) " " ellama-assistant-nick ":\n"))
-          (ellama-stream prompt
-                         :session session
-                         :system system
-                         :on-done (if donecb (list 'ellama-chat-done donecb)
-                                    'ellama-chat-done)
-                         :filter (when (derived-mode-p 'org-mode)
-                                   #'ellama--translate-markdown-to-org-filter)))))))
+          (let ((display-prompt
+                 (ellama--prompt-display-with-images
+                  prompt images
+                  (if (derived-mode-p 'org-mode)
+                      'org-mode
+                    'markdown-mode))))
+            (if (equal (point-min) (point-max)) ;; empty buffer
+                (insert
+                 (ellama-get-nick-prefix-for-mode)
+                 " " ellama-user-nick ":\n"
+                 (ellama-context-format session)
+                 (ellama--fill-long-lines display-prompt) "\n\n"
+                 (ellama-get-nick-prefix-for-mode)
+                 " " ellama-assistant-nick ":\n")
+              (insert
+               (ellama-context-format session)
+               (ellama--fill-long-lines display-prompt) "\n\n"
+               (ellama-get-nick-prefix-for-mode)
+               " " ellama-assistant-nick ":\n")))
+          (ellama-stream
+           prompt
+           :session session
+           :system system
+           :images images
+           :on-done (if donecb
+                        (list 'ellama-chat-done donecb)
+                      'ellama-chat-done)
+           :filter (when (derived-mode-p 'org-mode)
+                     #'ellama--translate-markdown-to-org-filter)))))))
 
 ;;;###autoload
 (defun ellama-chat-with-system-from-buffer ()
@@ -2882,6 +3315,7 @@ the full response text when the request completes (with BUFFER current)."
      :system system)))
 
 (defvar ellama-context-global)
+(defvar ellama-context-ephemeral)
 
 ;;;###autoload
 (defun ellama-chat-send-last-message ()
@@ -2895,7 +3329,7 @@ the full response text when the request completes (with BUFFER current)."
                       message)))
     (goto-char (point-max))
     (insert "\n\n")
-    (when ellama-context-global
+    (when (or ellama-context-global ellama-context-ephemeral)
       (insert (ellama-context-format session)))
     (insert (ellama-get-nick-prefix-for-mode) " " ellama-assistant-nick ":\n")
     (ellama-stream text

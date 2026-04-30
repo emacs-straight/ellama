@@ -911,6 +911,179 @@ detailed comparison to help you decide:
       (when (buffer-live-p session-buffer)
         (kill-buffer session-buffer)))))
 
+(defun ellama-test--with-temp-image-file (body)
+  "Call BODY with a tiny temporary PNG file."
+  (let ((file-name (make-temp-file "ellama-image-" nil ".png")))
+    (unwind-protect
+        (progn
+          (with-temp-buffer
+            (set-buffer-multibyte nil)
+            (insert "\211PNG\r\n\032\n")
+            (write-region nil nil file-name nil 'silent))
+          (funcall body file-name))
+      (when (file-exists-p file-name)
+        (delete-file file-name)))))
+
+(ert-deftest test-ellama-file-to-llm-media ()
+  (ellama-test--with-temp-image-file
+   (lambda (file-name)
+     (let ((media (ellama--file-to-llm-media file-name)))
+       (should (llm-media-p media))
+       (should (equal (llm-media-mime-type media) "image/png"))
+       (should-not (multibyte-string-p (llm-media-data media)))))))
+
+(ert-deftest test-ellama-stream-builds-multipart-with-images ()
+  (ellama-test--with-temp-image-file
+   (lambda (file-name)
+     (let* ((provider (make-llm-fake))
+            (ellama-provider provider)
+            (ellama-response-process-method 'streaming)
+            (ellama-spinner-enabled nil)
+            (ellama-fill-paragraphs nil)
+            captured-prompt
+            done-text)
+       (cl-letf (((symbol-function 'llm-capabilities)
+                  (lambda (_provider) '(image-input)))
+                 ((symbol-function 'llm-chat-streaming)
+                  (lambda (_provider prompt _partial-callback response-callback
+                                     _error-callback &optional _multi-output)
+                    (setq captured-prompt prompt)
+                    (funcall response-callback '(:text "ok"))
+                    nil)))
+         (with-temp-buffer
+           (ellama-stream "Describe image"
+                          :provider provider
+                          :images (list file-name)
+                          :on-done (lambda (text) (setq done-text text)))))
+       (should (equal done-text "ok"))
+       (let* ((content (llm-chat-prompt-interaction-content
+                        (car (llm-chat-prompt-interactions captured-prompt))))
+              (parts (llm-multipart-parts content)))
+         (should (llm-multipart-p content))
+         (should (equal (car parts) "Describe image"))
+         (should (llm-media-p (cadr parts)))
+         (should (equal (llm-media-mime-type (cadr parts)) "image/png")))))))
+
+(ert-deftest test-ellama-stream-rejects-images-without-provider-support ()
+  (ellama-test--with-temp-image-file
+   (lambda (file-name)
+     (let ((provider (make-llm-fake))
+           (ellama-response-process-method 'streaming))
+       (cl-letf (((symbol-function 'llm-capabilities)
+                  (lambda (_provider) nil)))
+         (should-error
+          (with-temp-buffer
+            (ellama-stream "Describe image"
+                           :provider provider
+                           :images (list file-name)))))))))
+
+(ert-deftest test-ellama-prompt-attach-pending-tool-media ()
+  (ellama-test--with-temp-image-file
+   (lambda (file-name)
+     (let* ((provider (make-llm-fake))
+            (session (make-ellama-session
+                      :id "image-tool"
+                      :provider provider
+                      :prompt (llm-make-chat-prompt "initial")))
+            (prompt (ellama-session-prompt session)))
+       (ellama--session-add-pending-tool-media session file-name)
+       (cl-letf (((symbol-function 'llm-capabilities)
+                  (lambda (_provider) '(image-input))))
+         (ellama--prompt-attach-pending-tool-media
+          session prompt provider))
+       (should-not (ellama--session-extra-get session :pending-tool-media))
+       (let* ((content (llm-chat-prompt-interaction-content
+                        (car (last (llm-chat-prompt-interactions prompt)))))
+              (parts (llm-multipart-parts content)))
+         (should (llm-multipart-p content))
+         (should (string-match-p "Images read by tools" (car parts)))
+         (should (llm-media-p (cadr parts))))))))
+
+(ert-deftest test-ellama-ask-image-adds-ephemeral-context ()
+  (let (context-call chat-call)
+    (cl-letf (((symbol-function 'ellama-context-add-image-file)
+               (lambda (file-name &optional ephemeral)
+                 (setq context-call (list file-name ephemeral))))
+              ((symbol-function 'ellama-chat)
+               (lambda (prompt create-session &rest args)
+                 (setq chat-call (list prompt create-session args)))))
+      (ellama-ask-image "/tmp/image.png" "Describe it" t :ephemeral t))
+    (should (equal context-call '("/tmp/image.png" t)))
+    (should (equal chat-call '("Describe it" t (:ephemeral t))))))
+
+(ert-deftest test-ellama-chat-with-images-adds-ephemeral-context ()
+  (let (context-calls chat-call)
+    (cl-letf (((symbol-function 'ellama-context-add-image-file)
+               (lambda (file-name &optional ephemeral)
+                 (push (list file-name ephemeral) context-calls)))
+              ((symbol-function 'ellama-chat)
+               (lambda (prompt create-session &rest args)
+                 (setq chat-call (list prompt create-session args)))))
+      (ellama-chat-with-images
+       '("/tmp/one.png" "/tmp/two.png") "Compare them" nil :ephemeral t))
+    (should (equal (nreverse context-calls)
+                   '(("/tmp/one.png" t) ("/tmp/two.png" t))))
+    (should (equal chat-call '("Compare them" nil (:ephemeral t))))))
+
+(ert-deftest test-ellama-chat-send-last-message-displays-ephemeral-image-context ()
+  (ellama-test--with-temp-image-file
+   (lambda (file-name)
+     (let ((ellama-context-global nil)
+           (ellama-context-ephemeral
+            (list (ellama-context-element-image-file :name file-name)))
+           (ellama-major-mode 'org-mode)
+           (ellama-fill-paragraphs nil)
+           (session (make-ellama-session
+                     :id "context-image"
+                     :provider (make-llm-fake)))
+           captured-prompt)
+       (with-temp-buffer
+         (org-mode)
+         (setq ellama--current-session session)
+         (insert "** User:\nDescribe one more image")
+         (cl-letf (((symbol-function 'ellama-stream)
+                    (lambda (prompt &rest _args)
+                      (setq captured-prompt prompt))))
+           (ellama-chat-send-last-message))
+         (should (equal captured-prompt "Describe one more image"))
+         (should (string-match-p "Context:" (buffer-string)))
+         (should (string-match-p
+                  (regexp-quote
+                   (format "[[file:%s][%s]]"
+                           file-name
+                           (file-name-nondirectory file-name)))
+                  (buffer-string))))))))
+
+(ert-deftest test-ellama-stream-displays-session-buffer-on-generation ()
+  (let* ((provider (make-llm-fake
+                    :chat-action-func (lambda () "Chat answer")))
+         (ellama-provider provider)
+         (ellama-response-process-method 'streaming)
+         (ellama-spinner-enabled nil)
+         (ellama-fill-paragraphs nil)
+         (ellama-display-session-buffer-on-generation t)
+         (ellama--active-sessions (make-hash-table :test #'equal))
+         (ellama--active-session-states (make-hash-table :test #'equal))
+         (session (make-ellama-session :id "display-test"
+                                       :provider provider
+                                       :prompt nil))
+         (session-buffer (generate-new-buffer " *ellama-display-test*"))
+         displayed-buffer)
+    (unwind-protect
+        (progn
+          (ellama--register-session session session-buffer t)
+          (cl-letf (((symbol-function 'sleep-for)
+                     (lambda (&rest _args) nil))
+                    ((symbol-function 'display-buffer)
+                     (lambda (buffer &optional _action)
+                       (setq displayed-buffer buffer)
+                       buffer)))
+            (with-current-buffer session-buffer
+              (ellama-stream "next prompt")))
+          (should (eq displayed-buffer session-buffer)))
+      (when (buffer-live-p session-buffer)
+        (kill-buffer session-buffer)))))
+
 (defun ellama-test--compact-session (provider)
   "Return test session with PROVIDER and compactable history."
   (let ((prompt (llm-make-chat-prompt "user 1" :context "System context")))
@@ -1215,6 +1388,90 @@ detailed comparison to help you decide:
         (should (null error-captured))
         (should (equal done-text "Recovered answer"))
         (should (equal (buffer-string) "Recovered answer"))))))
+
+(ert-deftest test-ellama-normalize-tool-use-args-decodes-unibyte-json ()
+  (let* ((raw-json
+          (encode-coding-string
+           "{\"content\":\"├── research_plan.md\",\"file_name\":\"x\"}"
+           'utf-8-unix))
+         (tool-use
+          (make-llm-provider-utils-tool-use
+           :id "call"
+           :name "write_file"
+           :args raw-json))
+         (prompt (llm-make-chat-prompt "continue")))
+    (setf (llm-chat-prompt-interactions prompt)
+          (append
+           (llm-chat-prompt-interactions prompt)
+           (list
+            (make-llm-chat-prompt-interaction
+             :role 'assistant
+             :content (list tool-use)))))
+    (ellama--normalize-prompt-tool-use-args prompt)
+    (let* ((args (llm-provider-utils-tool-use-args tool-use))
+           (content (cdr (assq 'content args))))
+      (should (equal content "├── research_plan.md"))
+      (should (multibyte-string-p content))
+      (should (json-serialize args)))))
+
+(ert-deftest test-ellama-normalize-tool-use-args-keeps-malformed-json-safe ()
+  (let* ((raw-json
+          (encode-coding-string
+           "{\"content\":\"├── research_plan.md\""
+           'utf-8-unix))
+         (normalized (ellama--normalize-tool-use-args raw-json)))
+    (should (stringp normalized))
+    (should (multibyte-string-p normalized))
+    (should (json-serialize normalized))))
+
+(ert-deftest test-ellama-sanitize-provider-chat-request-decodes-arguments ()
+  (let* ((arguments (encode-coding-string
+                     (json-serialize
+                      '((content . "├── research_plan.md")
+                        (file_name . "x")))
+                     'utf-8-unix))
+         (request `(:messages [(:tool_calls
+                                [(:function (:arguments ,arguments))])]))
+         (sanitized (ellama--sanitize-provider-chat-request request))
+         (sanitized-arguments
+          (plist-get
+           (plist-get
+            (aref (plist-get (aref (plist-get sanitized :messages) 0)
+                             :tool_calls)
+                  0)
+            :function)
+           :arguments)))
+    (should-not (multibyte-string-p arguments))
+    (should (multibyte-string-p sanitized-arguments))
+    (should (json-serialize sanitized))))
+
+(ert-deftest test-ellama-collect-openai-streaming-tool-uses-uses-max-index ()
+  (let* ((data
+          [((index . 0)
+            (id . "call-1")
+            (function
+             (name . "shell_command")
+             (arguments . "{\"cmd\":\"one\"}")))
+           ((index . 1)
+            (id . "call-2")
+            (function
+             (name . "shell_command")
+             (arguments . "{\"cmd\":\"two\"}")))])
+         (tool-uses
+          (llm-provider-utils-openai-collect-streaming-tool-uses data)))
+    (should (= (length tool-uses) 2))
+    (should (equal (llm-provider-utils-tool-use-id (nth 0 tool-uses))
+                   "call-1"))
+    (should (equal (llm-provider-utils-tool-use-id (nth 1 tool-uses))
+                   "call-2"))
+    (should (equal (cdr (assq
+                         'cmd
+                         (llm-provider-utils-tool-use-args (nth 0 tool-uses))))
+                   "one"))
+    (should (equal (cdr (assq
+                         'cmd
+                         (llm-provider-utils-tool-use-args (nth 1 tool-uses))))
+                   "two"))))
 
 (ert-deftest test-ellama-stream-retry-tracks-latest-request-for-cancel ()
   (let* ((call-count 0)
@@ -1729,6 +1986,33 @@ region, season, or type)! 🍎🍊"))))
             (should (equal (ellama-session-id session) "legacy"))
             (should (equal (ellama--session-uid session) "legacy"))))
       (delete-file file-name t))))
+
+(ert-deftest test-ellama-session-file-candidates-newest-first ()
+  (let ((dir (make-temp-file "ellama-sessions-" t)))
+    (unwind-protect
+        (let ((older (file-name-concat dir "older.org"))
+              (middle (file-name-concat dir "middle.org"))
+              (newer (file-name-concat dir "newer.org"))
+              (hidden (file-name-concat dir ".hidden.org")))
+          (dolist (file (list older middle newer hidden))
+            (with-temp-file file
+              (insert file)))
+          (set-file-times older (seconds-to-time 1000))
+          (set-file-times middle (seconds-to-time 2000))
+          (set-file-times newer (seconds-to-time 3000))
+          (should (equal (ellama--session-file-candidates dir)
+                         '("newer.org" "middle.org" "older.org"))))
+      (delete-directory dir t))))
+
+(ert-deftest test-ellama-presorted-completion-table-keep-order ()
+  (let* ((candidates '("newer.org" "middle.org" "older.org"))
+         (table (ellama--presorted-completion-table candidates))
+         (metadata (completion-metadata "" table nil)))
+    (should (equal (all-completions "" table) candidates))
+    (should (eq (completion-metadata-get metadata 'display-sort-function)
+                #'identity))
+    (should (eq (completion-metadata-get metadata 'cycle-sort-function)
+                #'identity))))
 
 (ert-deftest test-ellama-session-rename-keep-uid ()
   (let* ((provider (make-llm-fake :chat-action-func (lambda () "ok")))

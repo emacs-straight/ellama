@@ -14,6 +14,5 @@ File: dir,	Node: Top	This is the top of the INFO tree
 
 * Menu:
 
-Emacs misc features
-* Ellama: (ellama).             Tool for interaction with large language 
-                                  models.
+Misc
+* (ellama).                     Ellama.

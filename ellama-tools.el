@@ -37,12 +37,24 @@
 (declare-function llm-standard-provider-p "llm-provider-utils" (provider))
 (declare-function ellama-new-session "ellama"
                   (provider prompt &optional ephemeral))
+(declare-function ellama-session-p "ellama" (session))
 (declare-function ellama-session-extra "ellama" (session))
 (declare-function ellama-session-id "ellama" (session))
+(declare-function ellama-session-provider "ellama" (session))
+(declare-function ellama-get-session-buffer "ellama" (id))
+(declare-function ellama-get-nick-prefix-for-mode "ellama" ())
+(declare-function ellama--fill-long-lines "ellama" (string))
+(declare-function ellama-image-file-p "ellama" (file-name))
+(declare-function ellama--image-mime-type "ellama" (file-name))
+(declare-function ellama--file-size "ellama" (file-name))
+(declare-function ellama--provider-supports-image-input-p "ellama" (provider))
+(declare-function ellama--session-add-pending-tool-media
+                  "ellama" (session file-name))
 (declare-function ellama-stream "ellama" (prompt &rest args))
 
 (defvar ellama-provider)
 (defvar ellama-coding-provider)
+(defvar ellama-assistant-nick)
 (defvar ellama--current-session)
 (defvar ellama--current-session-id)
 
@@ -52,10 +64,23 @@
 (defvar ellama-tools-enabled nil
   "List of tools that have been enabled.")
 
+(defvar ellama-tools--current-session nil
+  "Current Ellama session used while executing tools.")
+
 (defun ellama-tools--set-session-extra (session extra)
   "Set SESSION EXTRA."
   (with-no-warnings
     (setf (ellama-session-extra session) extra)))
+
+(defun ellama-tools--session-extra-with (session &rest pairs)
+  "Return SESSION extra plist with PAIRS applied.
+PAIRS is a flat plist of keys and values."
+  (let ((extra (if (plistp (ellama-session-extra session))
+                   (copy-sequence (ellama-session-extra session))
+                 nil)))
+    (while pairs
+      (setq extra (plist-put extra (pop pairs) (pop pairs))))
+    extra))
 
 (defcustom ellama-tools-allow-all nil
   "Allow `ellama' using all the tools without user confirmation.
@@ -72,6 +97,16 @@ Tools from this list will work without user confirmation."
 (defcustom ellama-tools-argument-max-length 50
   "Max length of function argument in the confirmation prompt."
   :type 'integer
+  :group 'ellama)
+
+(defcustom ellama-tools-read-file-default-mode 'auto
+  "Default mode for the `read_file' tool.
+Use `auto' to read text files as text and supported image files as media.
+Use `text' to force text reading.
+Use `image' to force image handling."
+  :type '(choice (const auto)
+                 (const text)
+                 (const image))
   :group 'ellama)
 
 (defcustom ellama-tools-use-srt nil
@@ -104,6 +139,23 @@ Plist with keys `:path', `:mtime' and `:policy'.")
 (defcustom ellama-tools-subagent-default-max-steps 30
   "Default maximum number of auto-continue steps for a sub-agent."
   :type 'integer
+  :group 'ellama)
+
+(defcustom ellama-tools-task-template-dirs
+  (list (locate-user-emacs-file "ellama/task-templates"))
+  "Directories used to resolve relative task template names.
+The `task' tool can render a template before spawning a sub-agent.  When
+`template_base' is omitted in the tool call, relative template names are
+searched in these directories."
+  :type '(repeat directory)
+  :group 'ellama)
+
+(defcustom ellama-tools-task-template-allow-absolute-paths nil
+  "Allow `task' template names to be absolute file names.
+When nil, absolute template names are rejected.  Relative template names are
+always resolved under either the tool call's `template_base' argument or
+`ellama-tools-task-template-dirs'."
+  :type 'boolean
   :group 'ellama)
 
 (defcustom ellama-tools-output-line-budget-enabled t
@@ -1585,17 +1637,83 @@ Wrap command with `srt' when `ellama-tools-use-srt' is non-nil."
       (apply #'call-process (car argv) nil t nil (cdr argv))
       (buffer-string))))
 
-(defun ellama-tools-read-file-tool (file-name)
-  "Read the file FILE-NAME."
+(defun ellama-tools--read-file-mode (mode)
+  "Return normalized read file MODE."
+  (let ((mode (or mode ellama-tools-read-file-default-mode)))
+    (cond
+     ((symbolp mode) mode)
+     ((stringp mode) (intern (downcase mode)))
+     (t 'auto))))
+
+(defun ellama-tools--binary-file-p (file-name)
+  "Return non-nil when FILE-NAME appears to be binary."
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert-file-contents-literally file-name nil 0 4096)
+    (goto-char (point-min))
+    (search-forward (string 0) nil t)))
+
+(defun ellama-tools--read-file-as-text (file-name)
+  "Read FILE-NAME as text for tool output."
+  (if (ellama-tools--binary-file-p file-name)
+      (format "File %s appears to be binary; text reading was not performed."
+              file-name)
+    (let ((content (with-temp-buffer
+                     (insert-file-contents file-name)
+                     (buffer-string))))
+      (ellama-tools--sanitize-tool-text-output
+       content
+       (format "File %s" file-name)))))
+
+(defun ellama-tools--read-image-file-tool (file-name)
+  "Queue image FILE-NAME for model input and return textual tool output."
+  (cond
+   ((string= (downcase (or (file-name-extension file-name) "")) "svg")
+    (format "SVG image input is not supported yet: %s" file-name))
+   ((not (ellama-image-file-p file-name))
+    (format "File %s is not a supported image file." file-name))
+   ((not (ellama-session-p
+          (or ellama--current-session ellama-tools--current-session)))
+    "Cannot attach image file: no active Ellama session.")
+   ((not (ellama--provider-supports-image-input-p
+          (ellama-session-provider
+           (or ellama--current-session ellama-tools--current-session))))
+    (format "Provider %s does not support image input."
+            (llm-name
+             (ellama-session-provider
+              (or ellama--current-session ellama-tools--current-session)))))
+   (t
+    (ellama--session-add-pending-tool-media
+     (or ellama--current-session ellama-tools--current-session)
+     file-name)
+    (let* ((expanded (expand-file-name file-name))
+           (link (if (provided-mode-derived-p major-mode 'org-mode)
+                     (format "[[file:%s][%s]]" expanded file-name)
+                   (format "[%s](file://%s)" file-name expanded))))
+      (format "Image file queued for model input: %s (%s, %d bytes)."
+              link
+              (ellama--image-mime-type file-name)
+              (ellama--file-size file-name))))))
+
+(defun ellama-tools-read-file-tool (file-name &optional mode)
+  "Read the file FILE-NAME.
+MODE can be `auto', `text' or `image'."
   (or (ellama-tools--tool-check-file-access file-name 'read)
-      (json-encode (if (not (file-exists-p file-name))
-                       (format "File %s doesn't exists." file-name)
-                     (let ((content (with-temp-buffer
-                                      (insert-file-contents file-name)
-                                      (buffer-string))))
-                       (ellama-tools--sanitize-tool-text-output
-                        content
-                        (format "File %s" file-name)))))))
+      (json-encode
+       (if (not (file-exists-p file-name))
+           (format "File %s doesn't exists." file-name)
+         (pcase (ellama-tools--read-file-mode mode)
+           ('auto
+            (if (ellama-image-file-p file-name)
+                (ellama-tools--read-image-file-tool file-name)
+              (ellama-tools--read-file-as-text file-name)))
+           ('text
+            (ellama-tools--read-file-as-text file-name))
+           ('image
+            (ellama-tools--read-image-file-tool file-name))
+           (_
+            (format "Unsupported read_file mode %S. Use auto, text or image."
+                    mode)))))))
 
 (ellama-tools-define-tool
  '(:function
@@ -1608,7 +1726,17 @@ Wrap command with `srt' when `ellama-tools-use-srt' is non-nil."
      :type
      string
      :description
-     "File name."))
+     "File name.")
+    (:name
+     "mode"
+     :type
+     string
+     :optional
+     t
+     :enum
+     ["auto" "text" "image"]
+     :description
+     "Read mode: auto, text, or image."))
    :description
    "Read the file FILE_NAME."))
 
@@ -2040,6 +2168,235 @@ ANSWER-VARIANT-LIST is a list of possible answer variants."))
    :description
    "Return content of file FILE_NAME lines in range FROM TO."))
 
+(defun ellama-tools--task-template-placeholder-names (template)
+  "Return placeholder names used by TEMPLATE."
+  (let ((start 0)
+        names)
+    (while (string-match "{\\([[:alnum:]_-]+\\)}" template start)
+      (push (match-string 1 template) names)
+      (setq start (match-end 0)))
+    (sort (delete-dups names) #'string<)))
+
+(defun ellama-tools--task-template-argument-name (key)
+  "Return string name for template argument KEY."
+  (cond
+   ((stringp key)
+    key)
+   ((keywordp key)
+    (substring (symbol-name key) 1))
+   ((symbolp key)
+    (symbol-name key))
+   (t
+    (format "%s" key))))
+
+(defun ellama-tools--task-template-arguments-alist (arguments)
+  "Return normalized alist from template ARGUMENTS."
+  (cond
+   ((null arguments)
+    nil)
+   ((hash-table-p arguments)
+    (let (result)
+      (maphash
+       (lambda (key value)
+         (push (cons (ellama-tools--task-template-argument-name key)
+                     (format "%s" value))
+               result))
+       arguments)
+      result))
+   ((and (listp arguments)
+         (cl-every
+          (lambda (item)
+            (and (consp item)
+                 (not (keywordp (car item)))))
+          arguments))
+    (mapcar
+     (lambda (item)
+       (cons (ellama-tools--task-template-argument-name (car item))
+             (format "%s" (cdr item))))
+     arguments))
+   ((and (listp arguments)
+         (zerop (mod (length arguments) 2)))
+    (let (result)
+      (while arguments
+        (push (cons (ellama-tools--task-template-argument-name
+                     (pop arguments))
+                    (format "%s" (pop arguments)))
+              result))
+      result))
+   (t
+    (error "Task template arguments must be an object"))))
+
+(defun ellama-tools--task-template-bullet-list (items)
+  "Return ITEMS formatted as a bullet list."
+  (if items
+      (mapconcat (lambda (item) (format "- %s" item)) items "\n")
+    "- none"))
+
+(defun ellama-tools--task-template-example (template template-base role names)
+  "Return example task call for TEMPLATE, TEMPLATE-BASE, ROLE and NAMES."
+  (format
+   "{\n  \"template\": %S,%s\n  \"arguments\": {%s\n  },\n  \"role\": %S\n}"
+   template
+   (if template-base
+       (format "\n  \"template_base\": %S," template-base)
+     "")
+   (if names
+       (concat
+        "\n"
+        (mapconcat
+         (lambda (name)
+           (format "    %S: \"...\"" name))
+         names
+         ",\n"))
+     "")
+   (or role "general")))
+
+(defun ellama-tools--task-template-validation-error
+    (template template-base role required supplied missing unused)
+  "Return task template validation message.
+TEMPLATE, TEMPLATE-BASE and ROLE describe the failed call.  REQUIRED,
+SUPPLIED, MISSING and UNUSED are lists of argument names."
+  (concat
+   "Task template validation failed. No subagent was started.\n\n"
+   (format "Template: %s\n" template)
+   (when template-base
+     (format "Template base: %s\n" template-base))
+   "\nRequired arguments:\n"
+   (ellama-tools--task-template-bullet-list required)
+   "\n\nSupplied arguments:\n"
+   (ellama-tools--task-template-bullet-list supplied)
+   "\n\nMissing arguments:\n"
+   (ellama-tools--task-template-bullet-list missing)
+   (when unused
+     (concat
+      "\n\nUnused arguments:\n"
+      (ellama-tools--task-template-bullet-list unused)
+      "\n\nThese were ignored. Use only the required argument names above."))
+   "\n\nRetry the task call using this shape:\n"
+   (ellama-tools--task-template-example
+    template template-base role required)))
+
+(defun ellama-tools--task-template-error (message)
+  "Return task template error MESSAGE."
+  (format "Task template error. No subagent was started.\n\n%s" message))
+
+(defun ellama-tools--task-template-readable-file (file base)
+  "Return FILE when it is a readable regular file under BASE."
+  (cond
+   ((not (file-directory-p base))
+    (error "%s" (ellama-tools--task-template-error
+                 (format "Template base is not a directory: %s"
+                         base))))
+   ((not (file-exists-p file))
+    (error "%s" (ellama-tools--task-template-error
+                 (format "Template does not exist: %s"
+                         file))))
+   (t
+    (let* ((base-name (file-truename (file-name-as-directory base)))
+           (file-name (file-truename file)))
+      (cond
+       ((not (file-in-directory-p file-name base-name))
+        (error "%s" (ellama-tools--task-template-error
+                     (format "Template path escapes base directory: %s"
+                             file))))
+       ((not (file-regular-p file-name))
+        (error "%s" (ellama-tools--task-template-error
+                     (format "Template is not a regular file: %s"
+                             file))))
+       ((not (file-readable-p file-name))
+        (error "%s" (ellama-tools--task-template-error
+                     (format "Template is not readable: %s"
+                             file))))
+       (t
+        file-name))))))
+
+(defun ellama-tools--resolve-task-template (template template-base)
+  "Resolve TEMPLATE using TEMPLATE-BASE or configured template directories."
+  (cond
+   ((or (null template) (string= template ""))
+    (error "%s" (ellama-tools--task-template-error
+                 "Template name is empty")))
+   ((file-name-absolute-p template)
+    (if (not ellama-tools-task-template-allow-absolute-paths)
+        (error "%s" (ellama-tools--task-template-error
+                     "Absolute template paths are disabled.  Use a relative \
+template with template_base"))
+      (let ((dir (file-name-directory template)))
+        (ellama-tools--task-template-readable-file template dir))))
+   (template-base
+    (ellama-tools--task-template-readable-file
+     (expand-file-name template template-base)
+     template-base))
+   (t
+    (let ((dirs ellama-tools-task-template-dirs)
+          resolved)
+      (while (and dirs (not resolved))
+        (let* ((base (expand-file-name (car dirs)))
+               (file (expand-file-name template base)))
+          (when (file-exists-p file)
+            (setq resolved
+                  (ellama-tools--task-template-readable-file file base))))
+        (setq dirs (cdr dirs)))
+      (or resolved
+          (error "%s" (ellama-tools--task-template-error
+                       (format "Template was not found in configured \
+template directories: %s"
+                               template))))))))
+
+(defun ellama-tools--render-task-template
+    (template-text template template-base role arguments)
+  "Render TEMPLATE-TEXT with ARGUMENTS.
+TEMPLATE, TEMPLATE-BASE and ROLE are used for validation hints."
+  (let* ((required (ellama-tools--task-template-placeholder-names
+                    template-text))
+         (alist (ellama-tools--task-template-arguments-alist arguments))
+         (supplied (sort (delete-dups (mapcar #'car alist)) #'string<))
+         (missing (cl-set-difference required supplied :test #'string=))
+         (unused (cl-set-difference supplied required :test #'string=))
+         (rendered template-text))
+    (when missing
+      (error "%s" (ellama-tools--task-template-validation-error
+                   template template-base role required supplied
+                   (sort missing #'string<) (sort unused #'string<))))
+    (dolist (item alist)
+      (setq rendered
+            (replace-regexp-in-string
+             (regexp-quote (format "{%s}" (car item)))
+             (cdr item)
+             rendered t t)))
+    rendered))
+
+(defun ellama-tools--task-description
+    (description template template-base role arguments)
+  "Return task DESCRIPTION or render TEMPLATE.
+TEMPLATE-BASE, ROLE and ARGUMENTS are used for template rendering and hints."
+  (if (and template (not (string= template "")))
+      (let* ((file-name (ellama-tools--resolve-task-template
+                         template template-base))
+             (template-text
+              (with-temp-buffer
+                (insert-file-contents file-name)
+                (buffer-string))))
+        (ellama-tools--render-task-template
+         template-text template template-base role arguments))
+    (or description
+        (error "%s" (ellama-tools--task-template-error
+                     "Either description or template is required")))))
+
+(defun ellama-tools--insert-subagent-prompt (buffer description)
+  "Insert sub-agent DESCRIPTION into BUFFER as a main-agent turn.
+Return insertion point for sub-agent response."
+  (with-current-buffer buffer
+    (save-excursion
+      (goto-char (point-max))
+      (let ((prefix (ellama-get-nick-prefix-for-mode)))
+        (unless (bobp)
+          (insert "\n"))
+        (insert prefix " Main agent:\n"
+                (ellama--fill-long-lines description) "\n\n"
+                prefix " " ellama-assistant-nick ":\n")
+        (point)))))
+
 (defun ellama-tools--make-report-result-tool (callback session)
   "Make report_result tool dynamically for SESSION.
 CALLBACK will be used to report result asyncronously."
@@ -2057,16 +2414,40 @@ CALLBACK will be used to report result asyncronously."
     :description "Report final result and terminate the task."
     :args ((:name "result" :type string))))
 
-(defun ellama--subagent-loop-handler (_text)
-  "Internal subagent loop handler."
-  (let* ((session ellama--current-session)
-         (extra (ellama-session-extra session))
+(defun ellama-tools--subagent-system-message (system-msg)
+  "Return subagent system message from SYSTEM-MSG."
+  (format
+   "%s\n\nINSTRUCTIONS:\n\
+Work step-by-step. Use tools when needed.\n\
+When the task is COMPLETE you MUST call `report_result` exactly once."
+   (or system-msg "")))
+
+(defun ellama-tools--subagent-buffer (session &optional buffer)
+  "Return live subagent BUFFER for SESSION."
+  (or (and (buffer-live-p buffer) buffer)
+      (when-let* (((ellama-session-p session))
+                  (extra (ellama-session-extra session))
+                  (uid (plist-get extra :uid)))
+        (ellama-get-session-buffer uid))
+      (when (ellama-session-p session)
+        (ellama-get-session-buffer (ellama-session-id session)))))
+
+(defun ellama--subagent-loop-handler (_text &optional session buffer system)
+  "Continue subagent SESSION loop in BUFFER with SYSTEM message."
+  (let* ((session (or session ellama--current-session))
+         (extra (and (ellama-session-p session)
+                     (ellama-session-extra session)))
          (done (plist-get extra :task-completed))
          (steps (or (plist-get extra :step-count) 0))
          (max (or (plist-get extra :max-steps)
                   ellama-tools-subagent-default-max-steps))
-         (callback (plist-get extra :result-callback)))
+         (callback (plist-get extra :result-callback))
+         (tools (plist-get extra :tools))
+         (system (or system (plist-get extra :system)))
+         (buffer (ellama-tools--subagent-buffer session buffer)))
     (cond
+     ((not (ellama-session-p session))
+      (message "Subagent session is not available."))
      (done
       (message "Subagent finished."))
      ((>= steps max)
@@ -2080,89 +2461,127 @@ CALLBACK will be used to report result asyncronously."
        (plist-put extra :step-count (1+ steps)))
       (ellama-stream
        ellama-tools-subagent-continue-prompt
+       :buffer buffer
        :session session
-       :on-done #'ellama--subagent-loop-handler)))))
+       :tools tools
+       :system system
+       :on-done
+       (ellama-tools--make-subagent-loop-handler
+        session buffer system))))))
 
-(defun ellama-tools-task-tool (callback description &optional role)
-  "Delegate DESCRIPTION to a sub-agent asynchronously.
+(defun ellama-tools--make-subagent-loop-handler
+    (session &optional buffer system)
+  "Return subagent loop handler for SESSION.
+BUFFER is the session buffer.  SYSTEM is the initial system prompt."
+  (lambda (text)
+    (ellama--subagent-loop-handler text session buffer system)))
+
+(defun ellama-tools-task-tool
+    (callback &optional description role template template-base arguments)
+  "Delegate DESCRIPTION or rendered TEMPLATE to a sub-agent asynchronously.
 
 CALLBACK   – function called once with the result string.
-ROLE       – role key from `ellama-tools-subagent-roles'."
-  (let* ((parent-id ellama--current-session-id)
+ROLE       – role key from `ellama-tools-subagent-roles'.
+TEMPLATE   – optional template name or relative path.
+TEMPLATE-BASE – optional base directory for relative TEMPLATE.
+ARGUMENTS  – object with template substitution values."
+  (let ((role-key (if (assoc role ellama-tools-subagent-roles)
+                      role
+                    "general")))
+    (condition-case err
+        (let* ((description
+                (ellama-tools--task-description
+                 description template template-base role-key arguments))
+               (parent-id ellama--current-session-id)
 
-         ;; ---- role resolution (safe fallback) ----
-         (role-key (if (assoc role ellama-tools-subagent-roles)
-                       role
-                     "general"))
+               (provider (ellama-tools--provider-for-role role-key))
+               (role-cfg   (cdr (assoc role-key ellama-tools-subagent-roles)))
+               (system-msg (plist-get role-cfg :system))
+               (subagent-system
+                (ellama-tools--subagent-system-message system-msg))
 
-         (provider (ellama-tools--provider-for-role role-key))
-         (role-cfg   (cdr (assoc role-key ellama-tools-subagent-roles)))
-         (system-msg (plist-get role-cfg :system))
+               (steps-limit ellama-tools-subagent-default-max-steps)
 
-         (steps-limit ellama-tools-subagent-default-max-steps)
+               ;; ---- create ephemeral worker session ----
+               (worker (ellama-new-session provider description t))
+               (worker-buffer (ellama-get-session-buffer
+                               (ellama-session-id worker)))
+               (worker-point (ellama-tools--insert-subagent-prompt
+                              worker-buffer description))
 
-         ;; ---- create ephemeral worker session ----
-         (worker (ellama-new-session provider description t))
+               ;; ---- resolve tools for role ----
+               (role-tools (ellama-tools--for-role role-key))
 
-         ;; ---- resolve tools for role ----
-         (role-tools (ellama-tools--for-role role-key))
+               ;; ---- dynamic report_result tool ----
+               (report-tool
+                (apply #'llm-make-tool
+                       (ellama-tools--make-report-result-tool
+                        callback worker)))
 
-         ;; ---- dynamic report_result tool ----
-         (report-tool
-          (apply #'llm-make-tool
-                 (ellama-tools--make-report-result-tool callback worker)))
+               ;; IMPORTANT: report tool must be first (termination tool priority)
+               (all-tools (cons report-tool role-tools)))
 
-         ;; IMPORTANT: report tool must be first (termination tool priority)
-         (all-tools (cons report-tool role-tools)))
+          ;; ============================================================
+          ;; Initialize session state (single source of truth)
+          ;; ============================================================
 
-    ;; ============================================================
-    ;; Initialize session state (single source of truth)
-    ;; ============================================================
+          (ellama-tools--set-session-extra
+           worker
+           (ellama-tools--session-extra-with
+            worker
+            :parent-session parent-id
+            :role role-key
+            :tools all-tools
+            :result-callback callback
+            :task-completed nil
+            :step-count 0
+            :max-steps steps-limit
+            :system subagent-system))
 
-    (ellama-tools--set-session-extra
-     worker
-     (list
-      :parent-session parent-id
-      :role role-key
-      :tools all-tools
-      :result-callback callback
-      :task-completed nil
-      :step-count 0
-      :max-steps steps-limit))
+          ;; ============================================================
+          ;; Start the agent loop
+          ;; ============================================================
 
-    ;; ============================================================
-    ;; Start the agent loop
-    ;; ============================================================
+          (ellama-stream
+           description
+           :buffer worker-buffer
+           :point worker-point
+           :session worker
+           :on-done (ellama-tools--make-subagent-loop-handler
+                     worker worker-buffer subagent-system)
+           :tools all-tools
+           :system subagent-system)
 
-    (ellama-stream
-     description
-     :session worker
-     :on-done #'ellama--subagent-loop-handler
-     :tools all-tools
-     :system
-     (format
-      "%s\n\nINSTRUCTIONS:\n\
-Work step-by-step. Use tools when needed.\n\
-When the task is COMPLETE you MUST call `report_result` exactly once."
-      system-msg))
+          ;; ============================================================
+          ;; Immediate response to parent LLM (async contract)
+          ;; ============================================================
 
-    ;; ============================================================
-    ;; Immediate response to parent LLM (async contract)
-    ;; ============================================================
-
-    (message "Subtask started (session %s, role %s). Waiting for result via callback."
-             (ellama-session-id worker)
-             role-key)
-    nil))
+          (message "Subtask started (session %s, role %s). Waiting for result via callback."
+                   (ellama-session-id worker)
+                   role-key)
+          nil)
+      (error
+       (funcall callback (error-message-string err))
+       nil))))
 
 (ellama-tools-define-tool
  `(:function ellama-tools-task-tool
              :name "task"
              :async t
-             :description "Delegate a task to a sub-agent."
-             :args ((:name "description" :type string)
+             :description "Delegate a task to a sub-agent.
+Use either a free-form description or a template with arguments.  When using
+a template, pass arguments as an object whose keys exactly match template
+placeholders.  If validation fails, retry using the returned hint."
+             :args ((:name "description" :type string
+                           :description "Free-form task prompt. Optional when template is provided.")
                     (:name "role" :type string
-                           :enum ,(seq--into-vector (mapcar #'car ellama-tools-subagent-roles))))))
+                           :enum ,(seq--into-vector (mapcar #'car ellama-tools-subagent-roles)))
+                    (:name "template" :type string
+                           :description "Template name or relative path.")
+                    (:name "template_base" :type string
+                           :description "Base directory for resolving a relative template path.")
+                    (:name "arguments" :type object
+                           :description "Template substitution values keyed by placeholder name."))))
 
 (provide 'ellama-tools)
 ;;; ellama-tools.el ends here
