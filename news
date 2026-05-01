@@ -1,4 +1,15 @@
-1 Version 1.16.3
+1 Version 1.17.0
+════════════════
+
+  • Add maximum output token support.  Ellama now exposes
+    `ellama-max-tokens' and passes per-request `:max-tokens' values
+    through `llm-make-chat-prompt', so providers can cap generated
+    responses using their standard token limit support.  The model
+    transient menu can set or reset the max-token override, and
+    documentation and tests cover the new behavior.
+
+
+2 Version 1.16.3
 ════════════════
 
   • Sort saved session candidates newest first in `ellama-load-session'.
@@ -7,7 +18,7 @@
     order.
 
 
-2 Version 1.16.2
+3 Version 1.16.2
 ════════════════
 
   • Fix GNU ELPA tarball manual generation from `README.org'. Add Org
@@ -16,13 +27,13 @@
     export keywords.
 
 
-3 Version 1.16.1
+4 Version 1.16.1
 ════════════════
 
   • Remove false statement from documentation.
 
 
-4 Version 1.16.0
+5 Version 1.16.0
 ════════════════
 
   • Add image input support for prompts and context.  Ellama can now
@@ -43,7 +54,7 @@
     request context.
 
 
-5 Version 1.15.0
+6 Version 1.15.0
 ════════════════
 
   • Add task prompt templates for subagents.  The task tool can now
@@ -70,7 +81,7 @@
     default and provider request sanitization tests.
 
 
-6 Version 1.14.2
+7 Version 1.14.2
 ════════════════
 
   • Add project-local skill pointers for changelog and commit-message
@@ -85,7 +96,7 @@
     clarification.
 
 
-7 Version 1.14.1
+8 Version 1.14.1
 ════════════════
 
   • Refactor transient model handling and provider
@@ -93,13 +104,5 @@
     multiple provider types beyond Ollama, including OpenAI-compatible
     providers.
   • Implement `ellama-transient-set-model' and
-    `ellama-transient-set-url' for broader provider support.
-  • Add `ellama-transient-reset-model-fields' to reset model-specific
-    parameters.
-  • Refactor `ellama-construct-provider-from-transient' to dynamically
-    handle different provider types.
-  • Improve transient descriptions to dynamically show if values are set
-    to defaults.
-  • Add logic to filter transient menu items based on the selected
-    provider type.
+    `ellama-transient-set-url' for
   …  …
