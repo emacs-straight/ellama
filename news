@@ -1,4 +1,22 @@
-1 Version 1.17.0
+1 Version 1.17.1
+════════════════
+
+  • Hide provider values in transient provider selection.  Provider
+    completion candidates now show safe labels based on provider
+    variable names instead of printed provider values, so secret-bearing
+    provider structs are not exposed.
+  • Keep transient provider updates compatible with callable provider
+    keys from `llm'.  Regression tests now cover hidden provider values,
+    callable keys and selected-provider updates.
+  • Keep saved sessions loadable without persisting plaintext provider
+    keys.  Session persistence now strips provider keys and unreadable
+    tool functions before writing session files, restores keys from
+    configured providers by default and can restore keys from
+    `auth-source' when `ellama-session-persist-provider-keys' is set to
+    `auth-source'.
+
+
+2 Version 1.17.0
 ════════════════
 
   • Add maximum output token support.  Ellama now exposes
@@ -9,7 +27,7 @@
     documentation and tests cover the new behavior.
 
 
-2 Version 1.16.3
+3 Version 1.16.3
 ════════════════
 
   • Sort saved session candidates newest first in `ellama-load-session'.
@@ -18,7 +36,7 @@
     order.
 
 
-3 Version 1.16.2
+4 Version 1.16.2
 ════════════════
 
   • Fix GNU ELPA tarball manual generation from `README.org'. Add Org
@@ -27,13 +45,13 @@
     export keywords.
 
 
-4 Version 1.16.1
+5 Version 1.16.1
 ════════════════
 
   • Remove false statement from documentation.
 
 
-5 Version 1.16.0
+6 Version 1.16.0
 ════════════════
 
   • Add image input support for prompts and context.  Ellama can now
@@ -54,7 +72,7 @@
     request context.
 
 
-6 Version 1.15.0
+7 Version 1.15.0
 ════════════════
 
   • Add task prompt templates for subagents.  The task tool can now
@@ -79,30 +97,4 @@
     chunk contains multiple tool calls.
   • Fix CI compatibility issues around the task template directory
     default and provider request sanitization tests.
-
-
-7 Version 1.14.2
-════════════════
-
-  • Add project-local skill pointers for changelog and commit-message
-    workflows.  This makes repository-specific Codex skills discoverable
-    from `.codex/skills'.
-  • Add a `commit-message' skill for concise commit message generation
-    from diffs.
-  • Update agent instructions to document the project commit workflow.
-    The workflow now covers pre-commit checks, branch creation from
-    `main', iterative check/fix/commit/push cycles, documentation
-    updates, changelog generation, version bumps, and when to ask for
-    clarification.
-
-
-8 Version 1.14.1
-════════════════
-
-  • Refactor transient model handling and provider
-    construction. Generalize transient model handling to support
-    multiple provider types beyond Ollama, including OpenAI-compatible
-    providers.
-  • Implement `ellama-transient-set-model' and
-    `ellama-transient-set-url' for
   …  …
