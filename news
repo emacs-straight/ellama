@@ -1,4 +1,23 @@
-1 Version 1.17.1
+1 Version 1.18.0
+════════════════
+
+  • Add optional Pandoc-backed Markdown to Org conversion.  Users can
+    configure `ellama-markdown-to-org-converter' to use the builtin
+    converter, Pandoc, or automatic Pandoc detection while Ellama keeps
+    the builtin converter as the default fallback when Pandoc is
+    unavailable or conversion fails.
+
+
+2 Version 1.17.2
+════════════════
+
+  • Fix JSON request sanitization for dotted pairs in provider
+    non-standard parameters.  OpenAI-compatible providers can now pass
+    options such as `:search_options ((search_strategy . "agent"))'
+    without triggering a `wrong-type-argument listp' error.
+
+
+3 Version 1.17.1
 ════════════════
 
   • Hide provider values in transient provider selection.  Provider
@@ -16,7 +35,7 @@
     `auth-source'.
 
 
-2 Version 1.17.0
+4 Version 1.17.0
 ════════════════
 
   • Add maximum output token support.  Ellama now exposes
@@ -27,7 +46,7 @@
     documentation and tests cover the new behavior.
 
 
-3 Version 1.16.3
+5 Version 1.16.3
 ════════════════
 
   • Sort saved session candidates newest first in `ellama-load-session'.
@@ -36,7 +55,7 @@
     order.
 
 
-4 Version 1.16.2
+6 Version 1.16.2
 ════════════════
 
   • Fix GNU ELPA tarball manual generation from `README.org'. Add Org
@@ -45,13 +64,13 @@
     export keywords.
 
 
-5 Version 1.16.1
+7 Version 1.16.1
 ════════════════
 
   • Remove false statement from documentation.
 
 
-6 Version 1.16.0
+8 Version 1.16.0
 ════════════════
 
   • Add image input support for prompts and context.  Ellama can now
@@ -72,7 +91,7 @@
     request context.
 
 
-7 Version 1.15.0
+9 Version 1.15.0
 ════════════════
 
   • Add task prompt templates for subagents.  The task tool can now
@@ -88,13 +107,5 @@
     validation hints, continuation behavior, and session buffer display.
     The Info manual has been regenerated from `README.org'.
   • Improve OpenAI-compatible tool-call history handling by normalizing
-    stored tool-use arguments and decoding unibyte strings before
-    provider request serialization.  This keeps retried tool-call
-    history JSON serializable across older or mixed `llm' versions.
-  • Fix OpenAI-compatible streaming tool-call collection for multi-call
-    batches.  Streaming tool calls are collected using the maximum
-    emitted tool-call index, avoiding out-of-range errors when a single
-    chunk contains multiple tool calls.
-  • Fix CI compatibility issues around the task template directory
-    default and provider request sanitization tests.
+    stored
   …  …

@@ -1488,6 +1488,14 @@ detailed comparison to help you decide:
     (should (multibyte-string-p sanitized-arguments))
     (should (json-serialize sanitized))))
 
+(ert-deftest test-ellama-sanitize-provider-chat-request-keeps-dotted-pairs ()
+  (let* ((request '(:model "qwen3.6-plus"
+                    :enable_search t
+                    :search_options ((search_strategy . "agent"))))
+         (sanitized (ellama--sanitize-provider-chat-request request)))
+    (should (equal sanitized request))
+    (should (json-serialize sanitized))))
+
 (ert-deftest test-ellama-collect-openai-streaming-tool-uses-uses-max-index ()
   (let* ((data
           [((index . 0)
@@ -1579,6 +1587,42 @@ or other TikZ elements.")))
 This code will create a rectangle with a blue border and light
 blue filling. You can replace \'Text\' with your desired text
 or other TikZ elements."))))
+
+(ert-deftest test-ellama-md-to-org-converter-builtin ()
+  (let ((ellama-markdown-to-org-converter 'builtin))
+    (cl-letf (((symbol-function 'ellama--translate-markdown-to-org-with-pandoc)
+               (lambda (_text)
+                 (error "Pandoc should not be called"))))
+      (should (string= (ellama--translate-markdown-to-org-filter "**bold**")
+                       "*bold*")))))
+
+(ert-deftest test-ellama-md-to-org-converter-auto-pandoc ()
+  (let ((ellama-markdown-to-org-converter 'auto))
+    (cl-letf (((symbol-function 'ellama--pandoc-available-p)
+               (lambda () t))
+              ((symbol-function 'ellama--translate-markdown-to-org-with-pandoc)
+               (lambda (_text) "pandoc")))
+      (should (string= (ellama--translate-markdown-to-org-filter "**bold**")
+                       "pandoc")))))
+
+(ert-deftest test-ellama-md-to-org-converter-pandoc-fallback ()
+  (let ((ellama-markdown-to-org-converter 'pandoc))
+    (cl-letf (((symbol-function 'ellama--translate-markdown-to-org-with-pandoc)
+               (lambda (_text)
+                 (error "Pandoc failed"))))
+      (should (string= (ellama--translate-markdown-to-org-filter "**bold**")
+                       "*bold*")))))
+
+(ert-deftest test-ellama-md-to-org-pandoc-normalize ()
+  (let ((input "<think>reasoning</think>
+Sure! ```emacs-lisp
+(message \"ok\")
+```"))
+    (should (string= (ellama--prepare-markdown-for-pandoc input)
+                     (concat "\n\nELLAMA_THINK_BEGIN\n\n"
+                             "reasoning\n\nELLAMA_THINK_END\n\n"
+                             "Sure! \n```emacs-lisp\n"
+                             "(message \"ok\")\n```")))))
 
 (ert-deftest test-ellama-md-to-org-code-hard ()
   (let ((result (ellama--translate-markdown-to-org-filter "Here is your TikZ code for a blue rectangle:
