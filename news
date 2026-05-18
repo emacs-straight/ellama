@@ -1,4 +1,15 @@
-1 Version 1.19.0
+1 Version 1.19.1
+════════════════
+
+  • Stop installing global `llm-provider-chat-request' sanitizer advice.
+    Ellama now avoids rewriting request payloads from unrelated `llm'
+    clients after Ellama is loaded.
+  • Require `llm' 0.30.2 so Ellama can rely on upstream JSON
+    serialization and OpenAI-compatible tool-call argument fixes instead
+    of a global compatibility workaround.
+
+
+2 Version 1.19.0
 ════════════════
 
   • Add an evaluation harness for comparing agent tool designs with
@@ -26,7 +37,7 @@
     formatting, and refill targets.
 
 
-2 Version 1.18.0
+3 Version 1.18.0
 ════════════════
 
   • Add optional Pandoc-backed Markdown to Org conversion.  Users can
@@ -36,7 +47,7 @@
     unavailable or conversion fails.
 
 
-3 Version 1.17.2
+4 Version 1.17.2
 ════════════════
 
   • Fix JSON request sanitization for dotted pairs in provider
@@ -45,7 +56,7 @@
     without triggering a `wrong-type-argument listp' error.
 
 
-4 Version 1.17.1
+5 Version 1.17.1
 ════════════════
 
   • Hide provider values in transient provider selection.  Provider
@@ -63,7 +74,7 @@
     `auth-source'.
 
 
-5 Version 1.17.0
+6 Version 1.17.0
 ════════════════
 
   • Add maximum output token support.  Ellama now exposes
@@ -74,7 +85,7 @@
     documentation and tests cover the new behavior.
 
 
-6 Version 1.16.3
+7 Version 1.16.3
 ════════════════
 
   • Sort saved session candidates newest first in `ellama-load-session'.
@@ -83,28 +94,11 @@
     order.
 
 
-7 Version 1.16.2
+8 Version 1.16.2
 ════════════════
 
   • Fix GNU ELPA tarball manual generation from `README.org'. Add Org
     export metadata so ELPA writes `ellama.texi' with a valid title, and
     keep the local manual exporter from inheriting those README-only
     export keywords.
-
-
-8 Version 1.16.1
-════════════════
-
-  • Remove false statement from documentation.
-
-
-9 Version 1.16.0
-════════════════
-
-  • Add image input support for prompts and context.  Ellama can now
-    attach image files to chat requests, queue image context
-    ephemerally, and build multipart prompts for providers that support
-    image media.
-  • Add image-aware tool handling.  The `read_file' tool can run in
-    auto, text, or
   …  …
