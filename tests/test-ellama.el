@@ -242,6 +242,32 @@ STYLE controls partial message shape.  Default value is `word-leading'."
       (when (buffer-live-p reasoning-buffer)
         (kill-buffer reasoning-buffer)))))
 
+(ert-deftest test-ellama-response-handler-clears-request-before-done ()
+  (let ((request-active-in-done t)
+        (ellama-spinner-enabled nil)
+        request-context)
+    (with-temp-buffer
+      (setq-local ellama--change-group (prepare-change-group))
+      (activate-change-group ellama--change-group)
+      (setq request-context
+            (ellama--set-current-request 'request (list (current-buffer))))
+      (funcall
+       (ellama--response-handler
+        #'ignore
+        nil
+        (current-buffer)
+        (lambda (_text)
+          (setq request-active-in-done ellama--current-request))
+        #'ignore
+        'provider
+        'prompt
+        t
+        #'identity
+        request-context)
+       '(:text "answer"))
+      (should-not request-active-in-done)
+      (should-not ellama--current-request))))
+
 (ert-deftest test-ellama-format-tool-results-readable-alist ()
   (should
    (equal
@@ -1132,6 +1158,26 @@ detailed comparison to help you decide:
                            (file-name-nondirectory file-name)))
                   (buffer-string))))))))
 
+(ert-deftest test-ellama-chat-send-last-message-refuses-active-request ()
+  (let ((session (make-ellama-session
+                  :id "busy-chat"
+                  :provider (make-llm-fake)))
+        (ellama-context-global nil)
+        (ellama-context-ephemeral nil))
+    (with-temp-buffer
+      (org-mode)
+      (setq-local ellama--current-session session)
+      (setq-local ellama--current-request 'request)
+      (insert "** User:\nRepeat this")
+      (let ((before (buffer-string)))
+        (cl-letf (((symbol-function 'ellama-stream)
+                   (lambda (&rest _args)
+                     (ert-fail "Unexpected duplicate request"))))
+          (should-error
+           (ellama-chat-send-last-message)
+           :type 'user-error))
+        (should (equal before (buffer-string)))))))
+
 (ert-deftest test-ellama-stream-displays-session-buffer-on-generation ()
   (let* ((provider (make-llm-fake
                     :chat-action-func (lambda () "Chat answer")))
@@ -1162,6 +1208,42 @@ detailed comparison to help you decide:
       (when (buffer-live-p session-buffer)
         (kill-buffer session-buffer)))))
 
+(ert-deftest test-ellama-stream-refuses-active-session-request ()
+  (let* ((provider (make-llm-fake))
+         (session (ellama-test--compact-session provider))
+         (prompt (ellama-session-prompt session)))
+    (with-temp-buffer
+      (setq-local ellama--current-session session)
+      (setq-local ellama--current-request 'request)
+      (cl-letf (((symbol-function 'llm-chat-streaming)
+                 (lambda (&rest _args)
+                   (ert-fail "Unexpected duplicate request"))))
+        (should-error
+         (ellama-stream "new request" :session session)
+         :type 'user-error))
+      (should-not
+       (member "new request"
+               (mapcar #'llm-chat-prompt-interaction-content
+                       (llm-chat-prompt-interactions prompt)))))))
+
+(ert-deftest test-ellama-stream-refuses-session-compaction ()
+  (let* ((provider (make-llm-fake))
+         (session (ellama-test--compact-session provider))
+         (prompt (ellama-session-prompt session)))
+    (ellama--session-extra-put session :auto-compact-in-progress t)
+    (with-temp-buffer
+      (setq-local ellama--current-session session)
+      (cl-letf (((symbol-function 'llm-chat-streaming)
+                 (lambda (&rest _args)
+                   (ert-fail "Unexpected request during compaction"))))
+        (should-error
+         (ellama-stream "new request" :session session)
+         :type 'user-error))
+      (should-not
+       (member "new request"
+               (mapcar #'llm-chat-prompt-interaction-content
+                       (llm-chat-prompt-interactions prompt)))))))
+
 (defun ellama-test--compact-session (provider)
   "Return test session with PROVIDER and compactable history."
   (let ((prompt (llm-make-chat-prompt "user 1" :context "System context")))
@@ -1177,6 +1259,16 @@ detailed comparison to help you decide:
      :provider provider
      :prompt prompt
      :extra '(:uid "compact-test"))))
+
+(defun ellama-test--short-compact-session (provider)
+  "Return test session with PROVIDER and one user turn."
+  (let ((prompt (llm-make-chat-prompt "user 1" :context "System context")))
+    (llm-chat-prompt-append-response prompt "assistant 1" 'assistant)
+    (make-ellama-session
+     :id "short-compact-test"
+     :provider provider
+     :prompt prompt
+     :extra '(:uid "short-compact-test"))))
 
 (ert-deftest test-ellama-session-auto-compact-enabled-by-default ()
   (should ellama-session-auto-compact-enabled))
@@ -1238,6 +1330,8 @@ detailed comparison to help you decide:
                           '(:text "Summary of earlier durable facts."))
                  'request)))
       (with-temp-buffer
+        (text-mode)
+        (setq-local fill-column 80)
         (insert "assistant output")
         (should
          (ellama--session-compact
@@ -1261,7 +1355,202 @@ detailed comparison to help you decide:
         (should
          (string-match-p
           "Ellama compacted conversation context"
-          (buffer-string)))))))
+          (buffer-string)))
+        (should-not
+         (cl-some (lambda (line)
+                    (> (length line) fill-column))
+                  (split-string (buffer-string) "\n")))))))
+
+(ert-deftest test-ellama-session-compact-reduces-kept-turns ()
+  (let* ((provider (make-llm-fake))
+         (session (ellama-test--short-compact-session provider))
+         (prompt (ellama-session-prompt session))
+         (summary-prompt-text nil)
+         (ellama-session-auto-compact-provider (make-llm-fake))
+         (ellama-session-auto-compact-keep-last-turns 3)
+         (ellama-session-auto-compact-allow-fewer-kept-turns t)
+         (ellama-session-auto-compact-show-message t))
+    (cl-letf (((symbol-function 'llm-chat-async)
+               (lambda (_provider summary-prompt response-callback
+                                  _error-callback &optional _multi-output)
+                 (setq summary-prompt-text
+                       (llm-chat-prompt-to-text summary-prompt))
+                 (funcall response-callback '(:text "Short summary."))
+                 'request)))
+      (with-temp-buffer
+        (text-mode)
+        (setq-local fill-column 80)
+        (should
+         (ellama--session-compact
+          session
+          :provider provider
+          :buffer (current-buffer)
+          :token-count 50000))
+        (should
+         (equal
+          (mapcar #'llm-chat-prompt-interaction-content
+                  (llm-chat-prompt-interactions prompt))
+          '("Previous conversation summary:\n\nShort summary.")))
+        (should (string-match-p "User:\nuser 1" summary-prompt-text))
+        (should (string-match-p "Assistant:\nassistant 1"
+                                summary-prompt-text))
+        (should
+         (string-match-p
+          "Ellama compacted oversized conversation context"
+          (buffer-string)))
+        (should
+         (string-match-p
+          "configured to keep 3 recent[[:space:]\n]+turns, kept 0"
+          (buffer-string)))
+        (should-not
+         (cl-some (lambda (line)
+                    (> (length line) fill-column))
+                  (split-string (buffer-string) "\n")))))))
+
+(ert-deftest test-ellama-session-compact-keeps-opt-out-strict ()
+  (let* ((provider (make-llm-fake))
+         (session (ellama-test--short-compact-session provider))
+         (prompt (ellama-session-prompt session))
+         (ellama-session-auto-compact-provider (make-llm-fake))
+         (ellama-session-auto-compact-keep-last-turns 3)
+         (ellama-session-auto-compact-allow-fewer-kept-turns nil)
+         (message-text nil))
+    (cl-letf (((symbol-function 'llm-chat-async)
+               (lambda (&rest _args)
+                 (ert-fail "Unexpected compaction request")))
+              ((symbol-function 'message)
+               (lambda (format-string &rest args)
+                 (setq message-text
+                       (apply #'format format-string args)))))
+      (should-error
+       (ellama--session-compact
+        session
+        :provider provider
+        :token-count 50000)
+       :type 'error)
+      (should-not
+       (ellama--session-compact
+        session
+        :provider provider
+        :token-count 50000
+        :automatic t))
+      (should (string-match-p "Not enough session history" message-text))
+      (should
+       (equal
+        (mapcar #'llm-chat-prompt-interaction-content
+                (llm-chat-prompt-interactions prompt))
+        '("user 1" "assistant 1"))))))
+
+(ert-deftest test-ellama-response-handler-defers-done-during-auto-compact ()
+  (let* ((provider (make-llm-fake))
+         (session (ellama-test--compact-session provider))
+         (compact-response-callback nil)
+         (done-text nil)
+         (ellama-session-auto-compact-enabled t)
+         (ellama-session-auto-compact-token-threshold 100)
+         (ellama-session-auto-compact-provider (make-llm-fake))
+         (ellama-session-auto-compact-keep-last-turns 2)
+         (ellama-session-auto-compact-show-message nil)
+         (ellama-session-hide-org-quotes nil)
+         (ellama-spinner-enabled nil))
+    (cl-letf (((symbol-function 'llm-chat-async)
+               (lambda (_provider _summary-prompt response-callback
+                                  _error-callback &optional _multi-output)
+                 (setq compact-response-callback response-callback)
+                 'compact-request)))
+      (with-temp-buffer
+        (setq-local ellama--current-session session)
+        (setq-local ellama--change-group (prepare-change-group))
+        (activate-change-group ellama--change-group)
+        (funcall
+         (ellama--response-handler
+          #'ignore nil (current-buffer)
+          (lambda (text) (setq done-text text))
+          #'ignore provider (ellama-session-prompt session) t #'identity)
+         '(:text "answer" :input-tokens 90 :output-tokens 20))
+        (should compact-response-callback)
+        (should-not done-text)
+        (funcall compact-response-callback '(:text "Summary"))
+        (should (equal done-text "answer"))))))
+
+(ert-deftest test-ellama-response-handler-runs-deferred-done-in-session-buffer ()
+  (let* ((provider (make-llm-fake))
+         (session (ellama-test--compact-session provider))
+         (old-buffer (generate-new-buffer " *ellama-old-compact-test*"))
+         (new-buffer (generate-new-buffer " *ellama-new-compact-test*"))
+         (compact-response-callback nil)
+         (done-buffer nil)
+         (done-text nil)
+         (ellama--active-sessions (make-hash-table :test #'equal))
+         (ellama-session-auto-compact-enabled t)
+         (ellama-session-auto-compact-token-threshold 100)
+         (ellama-session-auto-compact-provider (make-llm-fake))
+         (ellama-session-auto-compact-keep-last-turns 2)
+         (ellama-session-auto-compact-show-message nil)
+         (ellama-session-hide-org-quotes nil)
+         (ellama-spinner-enabled nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'llm-chat-async)
+                   (lambda (_provider _summary-prompt response-callback
+                                      _error-callback &optional _multi-output)
+                     (setq compact-response-callback response-callback)
+                     'compact-request)))
+          (puthash "compact-test" new-buffer ellama--active-sessions)
+          (with-current-buffer old-buffer
+            (setq-local ellama--current-session session)
+            (setq-local ellama--change-group (prepare-change-group))
+            (activate-change-group ellama--change-group))
+          (funcall
+           (ellama--response-handler
+            #'ignore nil old-buffer
+            (lambda (text)
+              (setq done-text text)
+              (setq done-buffer (current-buffer)))
+            #'ignore provider (ellama-session-prompt session) t #'identity)
+           '(:text "answer" :input-tokens 90 :output-tokens 20))
+          (should compact-response-callback)
+          (should-not done-text)
+          (funcall compact-response-callback '(:text "Summary"))
+          (should (equal done-text "answer"))
+          (should (eq done-buffer new-buffer)))
+      (when (buffer-live-p old-buffer)
+        (kill-buffer old-buffer))
+      (when (buffer-live-p new-buffer)
+        (kill-buffer new-buffer)))))
+
+(ert-deftest test-ellama-response-handler-resumes-after-auto-compact-error ()
+  (let* ((provider (make-llm-fake))
+         (session (ellama-test--compact-session provider))
+         (compact-error-callback nil)
+         (done-text nil)
+         (ellama-session-auto-compact-enabled t)
+         (ellama-session-auto-compact-token-threshold 100)
+         (ellama-session-auto-compact-provider (make-llm-fake))
+         (ellama-session-auto-compact-keep-last-turns 2)
+         (ellama-session-auto-compact-show-message nil)
+         (ellama-session-hide-org-quotes nil)
+         (ellama-spinner-enabled nil))
+    (cl-letf (((symbol-function 'llm-chat-async)
+               (lambda (_provider _summary-prompt _response-callback
+                                  error-callback &optional _multi-output)
+                 (setq compact-error-callback error-callback)
+                 'compact-request))
+              ((symbol-function 'message)
+               (lambda (&rest _args) nil)))
+      (with-temp-buffer
+        (setq-local ellama--current-session session)
+        (setq-local ellama--change-group (prepare-change-group))
+        (activate-change-group ellama--change-group)
+        (funcall
+         (ellama--response-handler
+          #'ignore nil (current-buffer)
+          (lambda (text) (setq done-text text))
+          #'ignore provider (ellama-session-prompt session) t #'identity)
+         '(:text "answer" :input-tokens 90 :output-tokens 20))
+        (should compact-error-callback)
+        (should-not done-text)
+        (funcall compact-error-callback 'error "summary failed")
+        (should (equal done-text "answer"))))))
 
 (ert-deftest test-ellama-session-compact-restores-mutated-system-context ()
   (let* ((provider (make-llm-fake))
