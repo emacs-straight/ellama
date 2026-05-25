@@ -138,15 +138,17 @@
        (when (file-exists-p settings-file)
          (delete-file settings-file)))))
 
-(defun ellama-test--wait-shell-command-result (cmd)
-  "Run shell tool CMD and wait for a result string."
+(defun ellama-test--wait-shell-command-result (cmd &optional timeout)
+  "Run shell tool CMD with TIMEOUT and wait for a result string."
   (ellama-test--ensure-local-ellama-tools)
   (let ((result :pending)
-        (deadline (+ (float-time) 3.0)))
+        (deadline (+ (float-time)
+                     (max 3.0 (+ (or timeout 0) 1.0)))))
     (ellama-tools-shell-command-tool
      (lambda (res)
        (setq result res))
-     cmd)
+     cmd
+     timeout)
     (while (and (eq result :pending)
                 (< (float-time) deadline))
       (accept-process-output nil 0.01))
@@ -263,6 +265,27 @@ Return list with result and prompt."
     (ellama-test--wait-shell-command-result "printf 'ok\\n'")
     "ok")))
 
+(ert-deftest test-ellama-shell-command-tool-default-timeout ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let ((ellama-tools-shell-command-default-timeout 5))
+    (should (= (ellama-tools--shell-command-timeout nil) 5))))
+
+(ert-deftest test-ellama-shell-command-tool-times-out ()
+  (should
+   (string-match-p
+    "Command timed out after 0\\.1 seconds\\."
+    (ellama-test--wait-shell-command-result "sleep 1" 0.1))))
+
+(ert-deftest test-ellama-shell-command-tool-uses-cat-pager ()
+  (let ((process-environment (copy-sequence process-environment)))
+    (setenv "PAGER" "less")
+    (setenv "GIT_PAGER" "less")
+    (should
+     (string=
+      (ellama-test--wait-shell-command-result
+       "printf '%s|%s' \"$PAGER\" \"$GIT_PAGER\"")
+      "cat|cat"))))
+
 (ert-deftest test-ellama-enabled-shell-command-tool-async-contract ()
   (ellama-test--ensure-local-ellama-tools)
   (let ((ellama-tools-dlp-enabled t)
@@ -310,6 +333,23 @@ Return list with result and prompt."
        (equal
         (ellama-tools--command-argv "sh" "-c" "printf ok")
         '("/tmp/fake-srt" "--debug" "sh" "-c" "printf ok"))))))
+
+(ert-deftest test-ellama-tools-call-command-uses-cat-pager ()
+  (let ((process-environment (copy-sequence process-environment)))
+    (setenv "PAGER" "less")
+    (setenv "GIT_PAGER" "less")
+    (should
+     (equal
+      (ellama-tools--call-command-to-string
+       shell-file-name shell-command-switch
+       "printf '%s|%s' \"$PAGER\" \"$GIT_PAGER\"")
+      "cat|cat"))))
+
+(ert-deftest test-ellama-tools-call-command-with-timeout-times-out ()
+  (should
+   (eq (car (ellama-tools--call-command-with-timeout
+             0.1 shell-file-name shell-command-switch "sleep 1"))
+       'timeout)))
 
 (ert-deftest test-ellama-shell-command-tool-errors-when-srt-missing ()
   (ellama-test--ensure-local-ellama-tools)
@@ -643,7 +683,7 @@ Return list with result and prompt."
          (src-dir (expand-file-name "src" dir))
          (src (expand-file-name "a.txt" src-dir))
          (dst (expand-file-name "deep/path/b.txt" dir))
-         err-sym)
+         msg)
     (unwind-protect
         (progn
           (make-directory src-dir)
@@ -655,30 +695,63 @@ Return list with result and prompt."
            (let ((default-directory dir)
                  (ellama-tools-use-srt t)
                  (ellama-tools-srt-args (list "--settings" settings-file)))
-             (setq err-sym
-                   (car (should-error
-                         (ellama-tools-move-file-tool src dst))))
+             (setq msg (ellama-tools-move-file-tool src dst))
              ;; Missing destination directories should fail in rename-file,
              ;; not in local SRT policy checks.
-             (should (memq 'file-error
-                           (get err-sym 'error-conditions)))
-             (should-not (memq 'user-error
-                               (get err-sym 'error-conditions))))))
+             (should (string-match-p "Cannot move" msg))
+             (should (string-match-p (regexp-quote dst) msg))
+             (should-not (string-match-p "srt policy denied" msg)))))
       (when (file-exists-p dir)
         (delete-directory dir t)))))
 
 (ert-deftest test-ellama-tools-grep-tool-uses-shared-command-helper ()
   (ellama-test--ensure-local-ellama-tools)
-  (let (captured)
-    (cl-letf (((symbol-function 'ellama-tools--call-command)
+  (let ((ellama-tools-shell-command-default-timeout 5)
+        captured)
+    (cl-letf (((symbol-function 'ellama-tools--call-command-with-timeout)
                (lambda (&rest args)
                  (setq captured args)
                  '(0 . "a:1:match\n"))))
       (should (equal (ellama-tools-grep-tool default-directory "match")
                      "\"a:1:match\"")))
     (should (equal captured
-                   '("find" "." "-type" "f" "-exec"
-                     "grep" "--color=never" "-nH" "-e" "match" "{}" "+")))))
+                   '(5 "find" "." "-type" "f" "-exec"
+                       "grep" "--color=never" "-i" "-nH" "-e"
+                       "match" "{}" "+")))))
+
+(ert-deftest test-ellama-tools-grep-tool-passes-timeout ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let (captured)
+    (cl-letf (((symbol-function 'ellama-tools--call-command-with-timeout)
+               (lambda (&rest args)
+                 (setq captured args)
+                 '(0 . "a:1:match\n"))))
+      (should (equal (ellama-tools-grep-tool default-directory "match" nil 0.25)
+                     "\"a:1:match\"")))
+    (should (equal (car captured) 0.25))))
+
+(ert-deftest test-ellama-tools-grep-tool-explains-timeout ()
+  (ellama-test--ensure-local-ellama-tools)
+  (cl-letf (((symbol-function 'ellama-tools--call-command-with-timeout)
+             (lambda (&rest _args)
+               '(timeout . ""))))
+    (should (equal (ellama-tools-grep-tool default-directory "match" nil 0.1)
+                   "\"grep timed out after 0.1 seconds.\""))))
+
+(ert-deftest test-ellama-tools-grep-tool-can-match-case-sensitively ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let ((ellama-tools-shell-command-default-timeout 5)
+        captured)
+    (cl-letf (((symbol-function 'ellama-tools--call-command-with-timeout)
+               (lambda (&rest args)
+                 (setq captured args)
+                 '(0 . "a:1:Match\n"))))
+      (should (equal (ellama-tools-grep-tool default-directory "Match" t)
+                     "\"a:1:Match\"")))
+    (should (equal captured
+                   '(5 "find" "." "-type" "f" "-exec"
+                       "grep" "--color=never" "-nH" "-e"
+                       "Match" "{}" "+")))))
 
 (ert-deftest test-ellama-tools-grep-tool-explains-no-matches ()
   (ellama-test--ensure-local-ellama-tools)
@@ -711,6 +784,19 @@ Return list with result and prompt."
       (when (file-exists-p dir)
         (delete-directory dir t)))))
 
+(ert-deftest test-ellama-tools-grep-tool-matches-case-insensitively ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let* ((dir (make-temp-file "ellama-grep-ignore-case-" t))
+         (file (expand-file-name "sample.txt" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "Needle\n"))
+          (should (equal (ellama-tools-grep-tool dir "needle")
+                         "\"./sample.txt:1:Needle\"")))
+      (when (file-exists-p dir)
+        (delete-directory dir t)))))
+
 (ert-deftest test-ellama-tools-grep-in-file-tool-uses-shared-command-helper ()
   (ellama-test--ensure-local-ellama-tools)
   (let ((file (make-temp-file "ellama-grep-in-file-"))
@@ -726,6 +812,28 @@ Return list with result and prompt."
                        (setq captured args)
                        '(0 . "1:hello\n"))))
             (should (equal (ellama-tools-grep-in-file-tool "hello" file)
+                           "\"1:hello\""))))
+      (when (file-exists-p file)
+        (delete-file file)))
+    (should (equal captured
+                   (list "grep" "--color=never" "-i" "-nh"
+                         "hello" truename)))))
+
+(ert-deftest test-ellama-tools-grep-in-file-tool-can-match-case-sensitively ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let ((file (make-temp-file "ellama-grep-in-file-"))
+        truename
+        captured)
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "hello\n"))
+          (setq truename (file-truename file))
+          (cl-letf (((symbol-function 'ellama-tools--call-command)
+                     (lambda (&rest args)
+                       (setq captured args)
+                       '(0 . "1:hello\n"))))
+            (should (equal (ellama-tools-grep-in-file-tool "hello" file t)
                            "\"1:hello\""))))
       (when (file-exists-p file)
         (delete-file file)))
@@ -746,6 +854,28 @@ Return list with result and prompt."
                          (json-encode expected))))
       (when (file-exists-p file)
         (delete-file file)))))
+
+(ert-deftest test-ellama-tools-grep-in-file-tool-matches-case-insensitively ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let ((file (make-temp-file "ellama-grep-in-file-")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "Needle\n"))
+          (should (equal (ellama-tools-grep-in-file-tool "needle" file)
+                         "\"1:Needle\"")))
+      (when (file-exists-p file)
+        (delete-file file)))))
+
+(ert-deftest test-ellama-tools-grep-in-file-tool-explains-missing-file ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let ((file (expand-file-name "ellama-missing-file"
+                                temporary-file-directory)))
+    (when (file-exists-p file)
+      (delete-file file))
+    (should (equal (ellama-tools-grep-in-file-tool "needle" file)
+                   (json-encode
+                    (format "File %s does not exist." file))))))
 
 (ert-deftest test-ellama-read-file-tool-rejects-binary-content ()
   (ellama-test--ensure-local-ellama-tools)
@@ -1806,7 +1936,14 @@ Return list with result and prompt."
             (with-temp-buffer
               (insert-file-contents saved-path)
               (should (equal (buffer-string)
-                             "line-1\nline-2\nline-3\nline-4"))))
+                             "line-1\nline-2\nline-3\nline-4")))
+            (should
+             (string-match-p
+              (regexp-quote
+               (format
+                "Next suggested tool call: `lines_range` with file_name=%S, from=3, to=4."
+                saved-path))
+              result)))
         (when (and saved-path (file-exists-p saved-path))
           (delete-file saved-path))))))
 
@@ -1836,7 +1973,13 @@ Return list with result and prompt."
               (regexp-quote (format "Source file: %s" source-path))
               result))
             (should-not (string-match-p "Full output saved to:" result))
-            (should (string-match-p "Use `lines_range`" result))
+            (should
+             (string-match-p
+              (regexp-quote
+               (format
+                "Next suggested tool call: `lines_range` with file_name=%S, from=3, to=3."
+                source-path))
+              result))
             (should (string-match-p "grep_in_file" result)))
         (when (file-exists-p source-path)
           (delete-file source-path))))))
@@ -1922,6 +2065,23 @@ Return list with result and prompt."
           (with-temp-buffer
             (insert-file-contents file)
             (should (equal (buffer-string) "XXcde"))))
+      (when (file-exists-p file)
+        (delete-file file)))))
+
+(ert-deftest test-ellama-tools-edit-file-tool-reports-missing-content ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let ((file (make-temp-file "ellama-edit-missing-")))
+    (unwind-protect
+        (let (result)
+          (with-temp-file file
+            (insert "alpha\nbeta\n"))
+          (setq result
+                (ellama-tools-edit-file-tool file "alpha\\nbeta" "changed"))
+          (should (string-match-p "No replacement made" result))
+          (should (string-match-p "escaped \\\\n sequences" result))
+          (with-temp-buffer
+            (insert-file-contents file)
+            (should (equal (buffer-string) "alpha\nbeta\n"))))
       (when (file-exists-p file)
         (delete-file file)))))
 
@@ -2036,7 +2196,7 @@ Return list with result and prompt."
   (let ((missing-file
          (expand-file-name "missing-file-ellama-test.txt"
                            (make-temp-name temporary-file-directory))))
-    (should (string-match-p "doesn't exists"
+    (should (string-match-p "does not exist"
                             (ellama-tools-read-file-tool missing-file)))))
 
 (ert-deftest test-ellama-tools-write-append-prepend-roundtrip ()
@@ -2044,14 +2204,389 @@ Return list with result and prompt."
   (let ((file (make-temp-file "ellama-file-tools-")))
     (unwind-protect
         (progn
-          (ellama-tools-write-file-tool file "middle")
-          (ellama-tools-append-file-tool file "-tail")
-          (ellama-tools-prepend-file-tool file "head-")
+          (should (string-match-p
+                   (format "Wrote 6 characters to %s\\." (regexp-quote file))
+                   (ellama-tools-write-file-tool file "middle")))
+          (should (string-match-p
+                   (format "Appended 5 characters to %s\\."
+                           (regexp-quote file))
+                   (ellama-tools-append-file-tool file "-tail")))
+          (should (string-match-p
+                   (format "Prepended 5 characters to %s\\."
+                           (regexp-quote file))
+                   (ellama-tools-prepend-file-tool file "head-")))
           (with-temp-buffer
             (insert-file-contents file)
             (should (equal (buffer-string) "head-middle-tail"))))
       (when (file-exists-p file)
         (delete-file file)))))
+
+(ert-deftest test-ellama-tools-edit-after-hook-shows-enabled-output ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let ((file (make-temp-file "ellama-after-hook-show-"))
+        (ellama-tools-edit-before-shell-commands nil)
+        (ellama-tools-edit-after-shell-commands
+         '((:command "printf after-ok" :show-output t))))
+    (unwind-protect
+        (let ((msg (ellama-tools-write-file-tool file "x")))
+          (should (string-match-p "Wrote 1 characters" msg))
+          (should (string-match-p "After edit hook completed" msg))
+          (should (string-match-p "after-ok" msg))
+          (with-temp-buffer
+            (insert-file-contents file)
+            (should (equal (buffer-string) "x"))))
+      (when-let* ((buffer (get-file-buffer file)))
+        (kill-buffer buffer))
+      (when (file-exists-p file)
+        (delete-file file)))))
+
+(ert-deftest test-ellama-tools-edit-after-hook-hides-success-by-default ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let ((file (make-temp-file "ellama-after-hook-hide-"))
+        (ellama-tools-edit-before-shell-commands nil)
+        (ellama-tools-edit-after-shell-commands
+         '((:command "printf hidden"))))
+    (unwind-protect
+        (let ((msg (ellama-tools-write-file-tool file "x")))
+          (should (string-match-p "Wrote 1 characters" msg))
+          (should-not (string-match-p "After edit hook completed" msg))
+          (should-not (string-match-p "hidden" msg)))
+      (when-let* ((buffer (get-file-buffer file)))
+        (kill-buffer buffer))
+      (when (file-exists-p file)
+        (delete-file file)))))
+
+(ert-deftest test-ellama-tools-edit-after-hook-failure-keeps-edit ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let ((file (make-temp-file "ellama-after-hook-fail-"))
+        (ellama-tools-edit-before-shell-commands nil)
+        (ellama-tools-edit-after-shell-commands
+         '((:command "printf after-fail; exit 3"))))
+    (unwind-protect
+        (let ((msg (ellama-tools-write-file-tool file "x")))
+          (should (string-match-p "Wrote 1 characters" msg))
+          (should (string-match-p
+                   "After edit hook failed with exit status 3" msg))
+          (should (string-match-p "after-fail" msg))
+          (with-temp-buffer
+            (insert-file-contents file)
+            (should (equal (buffer-string) "x"))))
+      (when-let* ((buffer (get-file-buffer file)))
+        (kill-buffer buffer))
+      (when (file-exists-p file)
+        (delete-file file)))))
+
+(ert-deftest test-ellama-tools-edit-before-hook-failure-blocks-edit ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let ((file (make-temp-file "ellama-before-hook-fail-"))
+        (ellama-tools-edit-before-shell-commands
+         '((:command "printf before-fail; exit 4")))
+        (ellama-tools-edit-after-shell-commands nil))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "old"))
+          (let ((msg (ellama-tools-write-file-tool file "new")))
+            (should (string-match-p
+                     "Before edit hook failed with exit status 4" msg))
+            (should (string-match-p "before-fail" msg))
+            (should-not (string-match-p "Wrote 3 characters" msg)))
+          (with-temp-buffer
+            (insert-file-contents file)
+            (should (equal (buffer-string) "old"))))
+      (when-let* ((buffer (get-file-buffer file)))
+        (kill-buffer buffer))
+      (when (file-exists-p file)
+        (delete-file file)))))
+
+(ert-deftest test-ellama-tools-edit-before-hook-shows-enabled-output ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let ((file (make-temp-file "ellama-before-hook-show-"))
+        (ellama-tools-edit-before-shell-commands
+         '((:command "printf before-ok" :show-output t)))
+        (ellama-tools-edit-after-shell-commands nil))
+    (unwind-protect
+        (let ((msg (ellama-tools-write-file-tool file "x")))
+          (should (string-match-p "Before edit hook completed" msg))
+          (should (string-match-p "before-ok" msg))
+          (should (string-match-p "Wrote 1 characters" msg)))
+      (when-let* ((buffer (get-file-buffer file)))
+        (kill-buffer buffer))
+      (when (file-exists-p file)
+        (delete-file file)))))
+
+(ert-deftest test-ellama-tools-edit-hook-receives-context ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let* ((dir (make-temp-file "ellama-hook-context-" t))
+         (file (expand-file-name "note.txt" dir))
+         (hook-command
+          (concat
+           "printf \"%s|%s|%s\" "
+           "\"$ELLAMA_EDIT_OPERATION\" "
+           "\"$ELLAMA_TOOL_NAME\" \"$PWD\""))
+         (ellama-tools-edit-before-shell-commands nil)
+         (ellama-tools-edit-after-shell-commands
+          `((:command ,hook-command :show-output t))))
+    (unwind-protect
+        (let ((msg (ellama-tools-write-file-tool file "x")))
+          (should (string-match-p "write|write_file" msg))
+          (should (string-match-p (regexp-quote dir) msg)))
+      (when-let* ((buffer (get-file-buffer file)))
+        (kill-buffer buffer))
+      (when (file-exists-p file)
+        (delete-file file))
+      (when (file-directory-p dir)
+        (delete-directory dir)))))
+
+(ert-deftest test-ellama-tools-edit-hook-uses-cat-pager ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let ((file (make-temp-file "ellama-hook-pager-"))
+        (process-environment (copy-sequence process-environment))
+        (ellama-tools-edit-before-shell-commands nil)
+        (ellama-tools-edit-after-shell-commands
+         '((:command "printf '%s|%s' \"$PAGER\" \"$GIT_PAGER\""
+                     :show-output t))))
+    (setenv "PAGER" "less")
+    (setenv "GIT_PAGER" "less")
+    (unwind-protect
+        (let ((msg (ellama-tools-write-file-tool file "x")))
+          (should (string-match-p "After edit hook completed" msg))
+          (should (string-match-p "cat|cat" msg)))
+      (when-let* ((buffer (get-file-buffer file)))
+        (kill-buffer buffer))
+      (when (file-exists-p file)
+        (delete-file file)))))
+
+(ert-deftest test-ellama-tools-read-before-write-refuses-first-overwrite ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let* ((file (make-temp-file "ellama-read-before-write-"))
+         (session (make-ellama-session :id "read-before-write"))
+         (ellama--current-session session)
+         (ellama-tools--current-session nil)
+         (ellama-tools-read-before-write-enabled t))
+    (unwind-protect
+        (progn
+          (write-region "old" nil file nil 'silent)
+          (let ((result (ellama-tools-write-file-tool file "new")))
+            (should (string-match-p "Write refused" result))
+            (should (string-match-p "read_file" result))
+            (with-temp-buffer
+              (insert-file-contents file)
+              (should (equal (buffer-string) "old"))))
+          (let ((result (ellama-tools-write-file-tool file "new")))
+            (should (string-match-p "Wrote 3 characters" result))
+            (with-temp-buffer
+              (insert-file-contents file)
+              (should (equal (buffer-string) "new")))))
+      (when-let* ((buffer (get-file-buffer file)))
+        (kill-buffer buffer))
+      (when (file-exists-p file)
+        (delete-file file)))))
+
+(ert-deftest test-ellama-tools-read-before-write-allows-after-read-file ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let* ((file (make-temp-file "ellama-read-before-write-"))
+         (session (make-ellama-session :id "read-before-write"))
+         (ellama--current-session session)
+         (ellama-tools--current-session nil)
+         (ellama-tools-read-before-write-enabled t))
+    (unwind-protect
+        (progn
+          (write-region "old" nil file nil 'silent)
+          (ellama-tools-read-file-tool file "text")
+          (let ((result (ellama-tools-write-file-tool file "new")))
+            (should (string-match-p "Wrote 3 characters" result))
+            (with-temp-buffer
+              (insert-file-contents file)
+              (should (equal (buffer-string) "new")))))
+      (when-let* ((buffer (get-file-buffer file)))
+        (kill-buffer buffer))
+      (when (file-exists-p file)
+        (delete-file file)))))
+
+(ert-deftest test-ellama-tools-read-before-write-edit-file-counts-as-read ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let* ((file (make-temp-file "ellama-read-before-write-"))
+         (session (make-ellama-session :id "read-before-write"))
+         (ellama--current-session session)
+         (ellama-tools--current-session nil)
+         (ellama-tools-read-before-write-enabled t))
+    (unwind-protect
+        (progn
+          (write-region "old" nil file nil 'silent)
+          (let ((result (ellama-tools-edit-file-tool file "old" "mid")))
+            (should (string-match-p "Edited" result)))
+          (let ((result (ellama-tools-write-file-tool file "new")))
+            (should (string-match-p "Wrote 3 characters" result))
+            (with-temp-buffer
+              (insert-file-contents file)
+              (should (equal (buffer-string) "new")))))
+      (when-let* ((buffer (get-file-buffer file)))
+        (kill-buffer buffer))
+      (when (file-exists-p file)
+        (delete-file file)))))
+
+(ert-deftest test-ellama-tools-edit-hook-output-has-separate-budget ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let ((file (make-temp-file "ellama-hook-budget-"))
+        (ellama-tools-edit-before-shell-commands nil)
+        (ellama-tools-edit-after-shell-commands
+         '((:command "printf 'line1\\nline2\\n'" :show-output t)))
+        (ellama-tools-output-line-budget-enabled t)
+        (ellama-tools-output-line-budget-max-lines 1)
+        (ellama-tools-output-line-budget-max-line-length 200)
+        (ellama-tools-output-line-budget-save-overflow-file nil))
+    (unwind-protect
+        (let* ((raw (ellama-tools-write-file-tool file "x"))
+               (msg (ellama-tools--postprocess-output-result
+                     "write_file" raw nil nil)))
+          (should (string-match-p "Wrote 1 characters" msg))
+          (should (string-match-p "\\[ELLAMA OUTPUT TRUNCATED\\]" msg)))
+      (when-let* ((buffer (get-file-buffer file)))
+        (kill-buffer buffer))
+      (when (file-exists-p file)
+        (delete-file file)))))
+
+(ert-deftest test-ellama-tools-append-uses-visiting-buffer-content ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let ((file (make-temp-file "ellama-append-buffer-")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "disk"))
+          (with-current-buffer (find-file-noselect file)
+            (erase-buffer)
+            (insert "buffer"))
+          (ellama-tools-append-file-tool file "-tail")
+          (with-current-buffer (find-file-noselect file)
+            (should (equal (buffer-string) "buffer-tail")))
+          (with-temp-buffer
+            (insert-file-contents file)
+            (should (equal (buffer-string) "buffer-tail"))))
+      (when-let* ((buffer (get-file-buffer file)))
+        (kill-buffer buffer))
+      (when (file-exists-p file)
+        (delete-file file)))))
+
+(ert-deftest test-ellama-tools-edit-file-rejects-invalid-elisp ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let ((file (make-temp-file "ellama-edit-invalid-" nil ".el"))
+        (original "(defun sample ()\n  (message \"ok\"))\n"))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert original))
+          (let ((msg (ellama-tools-edit-file-tool
+                      file
+                      "(defun sample ()\n  (message \"ok\"))"
+                      "(defun sample ()\n  (message \"ok\")")))
+            (should (string-match-p "Edit rejected" msg))
+            (should (string-match-p "Missing closers" msg)))
+          (with-temp-buffer
+            (insert-file-contents file)
+            (should (equal (buffer-string) original))))
+      (when-let* ((buffer (get-file-buffer file)))
+        (kill-buffer buffer))
+      (when (file-exists-p file)
+        (delete-file file)))))
+
+(ert-deftest test-ellama-tools-write-file-rejects-invalid-elisp ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let ((file (make-temp-file "ellama-write-invalid-" nil ".el")))
+    (unwind-protect
+        (progn
+          (delete-file file)
+          (let ((msg (ellama-tools-write-file-tool
+                      file
+                      "(defun sample ()\n  (message \"ok\")\n")))
+            (should (string-match-p "Write rejected" msg))
+            (should (string-match-p "Mode: emacs-lisp-mode" msg))
+            (should-not (file-exists-p file))))
+      (when-let* ((buffer (get-file-buffer file)))
+        (kill-buffer buffer))
+      (when (file-exists-p file)
+        (delete-file file)))))
+
+(ert-deftest test-ellama-tools-append-prepend-reject-invalid-elisp ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let ((append-file (make-temp-file "ellama-append-invalid-" nil ".el"))
+        (prepend-file (make-temp-file "ellama-prepend-invalid-" nil ".el"))
+        (original "(defun sample ()\n  (message \"ok\"))\n"))
+    (unwind-protect
+        (progn
+          (with-temp-file append-file
+            (insert original))
+          (with-temp-file prepend-file
+            (insert original))
+          (let ((msg (ellama-tools-append-file-tool append-file ")")))
+            (should (string-match-p "Append rejected" msg))
+            (should (string-match-p "Unexpected closers" msg)))
+          (let ((msg (ellama-tools-prepend-file-tool prepend-file "(")))
+            (should (string-match-p "Prepend rejected" msg))
+            (should (string-match-p "Missing closers" msg)))
+          (dolist (file (list append-file prepend-file))
+            (with-temp-buffer
+              (insert-file-contents file)
+              (should (equal (buffer-string) original)))))
+      (dolist (file (list append-file prepend-file))
+        (when-let* ((buffer (get-file-buffer file)))
+          (kill-buffer buffer))
+        (when (file-exists-p file)
+          (delete-file file))))))
+
+(ert-deftest test-ellama-tools-write-file-skips-balance-for-text-mode ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let ((file (make-temp-file "ellama-write-text-" nil ".txt")))
+    (unwind-protect
+        (progn
+          (let ((msg (ellama-tools-write-file-tool file "plain text (\n")))
+            (should (string-match-p "Wrote 13 characters" msg))
+            (should-not (string-match-p "syntax validation" msg)))
+          (with-temp-buffer
+            (insert-file-contents file)
+            (should (equal (buffer-string) "plain text (\n"))))
+      (when-let* ((buffer (get-file-buffer file)))
+        (kill-buffer buffer))
+      (when (file-exists-p file)
+        (delete-file file)))))
+
+(ert-deftest test-ellama-tools-write-file-explains-missing-directory ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let* ((dir (make-temp-name
+               (expand-file-name "ellama-write-missing-dir-"
+                                 temporary-file-directory)))
+         (file (expand-file-name "note.txt" dir)))
+    (when (file-exists-p dir)
+      (delete-directory dir t))
+    (let ((msg (ellama-tools-write-file-tool file "x")))
+      (should (string-match-p "Cannot write" msg))
+      (should (string-match-p (regexp-quote file) msg)))))
+
+(ert-deftest test-ellama-tools-file-tools-explain-directory-path ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let ((dir (make-temp-file "ellama-file-tool-dir-" t)))
+    (unwind-protect
+        (progn
+          (should (string-match-p
+                   "is a directory, not a file"
+                   (json-parse-string
+                    (ellama-tools-read-file-tool dir))))
+          (should (string-match-p
+                   "path is a directory"
+                   (ellama-tools-write-file-tool dir "x")))
+          (should (string-match-p
+                   "is a directory, not a file"
+                   (json-parse-string
+                    (ellama-tools-grep-in-file-tool "x" dir))))
+          (should (string-match-p
+                   "is a directory, not a file"
+                   (ellama-tools-count-lines-tool dir)))
+          (should (string-match-p
+                   "is a directory, not a file"
+                   (json-parse-string
+                    (ellama-tools-lines-range-tool dir 1 1)))))
+      (when (file-exists-p dir)
+        (delete-directory dir t)))))
 
 (ert-deftest test-ellama-tools-directory-tree-excludes-dotfiles-and-sorts ()
   (ellama-test--ensure-local-ellama-tools)
@@ -2086,6 +2621,73 @@ Return list with result and prompt."
       (when (file-exists-p dir)
         (delete-directory dir t)))))
 
+(ert-deftest test-ellama-tools-directory-tree-tool-uses-default-timeout ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let ((dir (make-temp-file "ellama-tree-timeout-default-" t))
+        (ellama-tools-shell-command-default-timeout 5)
+        captured-timeout)
+    (unwind-protect
+        (cl-letf (((symbol-function 'float-time)
+                   (lambda () 100.0))
+                  ((symbol-function 'ellama-tools--directory-tree)
+                   (lambda (_dir _depth deadline)
+                     (setq captured-timeout (- deadline 100.0))
+                     '("ok\n" . nil))))
+          (should (equal (ellama-tools-directory-tree-tool dir) "ok\n"))
+          (should (= captured-timeout 5)))
+      (when (file-exists-p dir)
+        (delete-directory dir t)))))
+
+(ert-deftest test-ellama-tools-directory-tree-tool-passes-timeout ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let ((dir (make-temp-file "ellama-tree-timeout-" t))
+        captured-timeout)
+    (unwind-protect
+        (cl-letf (((symbol-function 'float-time)
+                   (lambda () 100.0))
+                  ((symbol-function 'ellama-tools--directory-tree)
+                   (lambda (_dir _depth deadline)
+                     (setq captured-timeout (- deadline 100.0))
+                     '("ok\n" . nil))))
+          (should (equal (ellama-tools-directory-tree-tool dir 0.25) "ok\n"))
+          (should (= captured-timeout 0.25)))
+      (when (file-exists-p dir)
+        (delete-directory dir t)))))
+
+(ert-deftest test-ellama-tools-directory-tree-tool-explains-timeout ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let ((dir (make-temp-file "ellama-tree-timeout-output-" t)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'ellama-tools--directory-tree)
+                   (lambda (&rest _args)
+                     '("|-a\n" . t))))
+          (should
+           (equal (ellama-tools-directory-tree-tool dir 0.1)
+                  "directory_tree timed out after 0.1 seconds.\n|-a\n")))
+      (when (file-exists-p dir)
+        (delete-directory dir t)))))
+
+(ert-deftest test-ellama-tools-grep-explains-missing-directory ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let ((dir (make-temp-name
+              (expand-file-name "ellama-grep-missing-dir-"
+                                temporary-file-directory))))
+    (when (file-exists-p dir)
+      (delete-directory dir t))
+    (should
+     (equal (ellama-tools-grep-tool dir "needle")
+            (json-encode
+             (format "Directory %s does not exist." dir))))))
+
+(ert-deftest test-ellama-tools-directory-tree-explains-file-path ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let ((file (make-temp-file "ellama-tree-file-")))
+    (unwind-protect
+        (should (equal (ellama-tools-directory-tree-tool file)
+                       (format "%s is not a directory." file)))
+      (when (file-exists-p file)
+        (delete-file file)))))
+
 (ert-deftest test-ellama-tools-project-root-falls-back-to-default-directory ()
   (ellama-test--ensure-local-ellama-tools)
   (let ((default-directory temporary-file-directory))
@@ -2119,10 +2721,14 @@ Return list with result and prompt."
     (unwind-protect
         (progn
           (with-temp-file src (insert "x"))
-          (ellama-tools-move-file-tool src dst)
+          (should (equal (ellama-tools-move-file-tool src dst)
+                         (format "Moved %s to %s." src dst)))
           (should (file-exists-p dst))
           (should-not (file-exists-p src))
-          (should-error (ellama-tools-move-file-tool src dst) :type 'error))
+          (should (equal (ellama-tools-move-file-tool src dst)
+                         (format
+                          "Cannot move file: source file does not exist: %s."
+                          src))))
       (when (file-exists-p src)
         (delete-file src))
       (when (file-exists-p dst)
@@ -2146,6 +2752,37 @@ Return list with result and prompt."
       (when (file-exists-p file)
         (delete-file file)))))
 
+(ert-deftest test-ellama-tools-count-lines-missing-file ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let ((file (expand-file-name "ellama-missing-lines-file"
+                                temporary-file-directory)))
+    (when (file-exists-p file)
+      (delete-file file))
+    (should (equal (ellama-tools-count-lines-tool file)
+                   (format "File %s does not exist." file)))))
+
+(ert-deftest test-ellama-tools-lines-range-explains-invalid-input ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let ((file (make-temp-file "ellama-lines-range-invalid-")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "alpha\nbeta\n"))
+          (should
+           (equal
+            (json-parse-string (ellama-tools-lines-range-tool file 3 2))
+            (format
+             "Invalid line range for %s: from (3) is greater than to (2)."
+             file)))
+          (should
+           (equal
+            (json-parse-string (ellama-tools-lines-range-tool file 1 3))
+            (format
+             "Invalid line range for %s: to (3) exceeds line count (2)."
+             file))))
+      (when (file-exists-p file)
+        (delete-file file)))))
+
 (ert-deftest test-ellama-tools-role-and-provider-resolution ()
   (ellama-test--ensure-local-ellama-tools)
   (let* ((ellama-provider 'default-provider)
@@ -2165,6 +2802,154 @@ Return list with result and prompt."
     (should (null (ellama-tools--for-role "missing")))
     (should (eq (ellama-tools--provider-for-role "all")
                 'default-provider))))
+
+(ert-deftest test-ellama-agent-start-plan-and-act-combines-tools-and-renders ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let* ((buffer (generate-new-buffer " *ellama-agent-start-test*"))
+         (base-tool (llm-make-tool :name "read_file" :function #'ignore))
+         (session (make-ellama-session
+                   :id "agent-start"
+                   :extra '(:uid "agent-start-uid"))))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (org-mode))
+          (let ((result (ellama-tools-start-plan-and-act
+                         session buffer "Do work" "System"
+                         (list base-tool) 5)))
+            (should (equal (plist-get result :system)
+                           (plist-get
+                            (ellama-tools--agent-state session)
+                            :system)))
+            (should (functionp (plist-get result :on-done)))
+            (should (equal (plist-get
+                            (ellama-tools--agent-state session)
+                            :phase)
+                           'planning))
+            (should (= (plist-get
+                        (ellama-tools--agent-state session)
+                        :max-steps)
+                       5))
+            (should (equal
+                     (mapcar #'llm-tool-name
+                             (plist-get (ellama-session-extra session)
+                                        :tools))
+                     '("agent_submit_plan"
+                       "agent_update_plan"
+                       "agent_report_result"
+                       "read_file")))
+            (with-current-buffer buffer
+              (should (string-match-p "Ellama Agent Status:"
+                                      (buffer-string)))
+              (should (string-match-p "Planning started"
+                                      (buffer-string))))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest test-ellama-agent-loop-handler-parses-fallback-state-and-continues ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let* ((buffer (generate-new-buffer " *ellama-agent-loop-test*"))
+         (base-tool (llm-make-tool :name "read_file" :function #'ignore))
+         (session (make-ellama-session
+                   :id "agent-loop"
+                   :extra (list :uid "agent-loop-uid"
+                                :tools (list base-tool)
+                                :agent-loop
+                                (list :phase 'planning
+                                      :plan nil
+                                      :step-count 0
+                                      :max-steps 3
+                                      :completed nil
+                                      :system "System"))))
+         (stream-call nil)
+         (state-text
+          "BEGIN_ELLAMA_AGENT_STATE
+phase: acting
+plan:
+- [ ] Inspect code
+- [ ] Implement change
+END_ELLAMA_AGENT_STATE"))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (org-mode)
+            (insert "** Ellama:\nInitial response\n"))
+          (cl-letf (((symbol-function 'ellama-get-session-buffer)
+                     (lambda (id)
+                       (and (member id '("agent-loop" "agent-loop-uid"))
+                            buffer)))
+                    ((symbol-function 'ellama-stream)
+                     (lambda (prompt &rest args)
+                       (setq stream-call (list prompt args)))))
+            (let ((ellama--current-session nil))
+              (funcall
+               (ellama-tools--make-agent-loop-handler
+                session buffer "System")
+               state-text))
+            (let ((state (ellama-tools--agent-state session)))
+              (should (equal (plist-get state :phase) 'acting))
+              (should (= (plist-get state :step-count) 1))
+              (should (equal (plist-get (car (plist-get state :plan))
+                                        :title)
+                             "Inspect code")))
+            (should (equal (plist-get (cadr stream-call) :session)
+                           session))
+            (should (equal (plist-get (cadr stream-call) :tools)
+                           (list base-tool)))
+            (should (functionp (plist-get (cadr stream-call) :on-done)))
+            (should (string-match-p "Current plan state"
+                                    (car stream-call)))
+            (should (string-match-p "Next pending item: Inspect code"
+                                    (car stream-call)))
+            (with-current-buffer buffer
+              (should (string-match-p "Ellama Agent Plan:"
+                                      (buffer-string)))
+              (should (string-match-p "Inspect code" (buffer-string)))
+              (should (string-match-p "Agent controller:"
+                                      (buffer-string))))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest test-ellama-agent-report-result-restores-original-tools ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let* ((buffer (generate-new-buffer " *ellama-agent-done-test*"))
+         (base-tool (llm-make-tool :name "read_file" :function #'ignore))
+         (agent-tools (ellama-tools--agent-controller-tools))
+         (session (make-ellama-session
+                   :id "agent-done"
+                   :extra (list :uid "agent-done-uid"
+                                :tools (append agent-tools (list base-tool))
+                                :agent-loop
+                                (list :phase 'acting
+                                      :plan (list (list :id 1
+                                                        :title "Done"
+                                                        :status 'done))
+                                      :completed nil
+                                      :had-original-tools t
+                                      :original-tools (list base-tool))))))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (org-mode))
+          (cl-letf (((symbol-function 'ellama-get-session-buffer)
+                     (lambda (id)
+                       (and (member id '("agent-done" "agent-done-uid"))
+                            buffer))))
+            (let ((ellama-tools--current-session session))
+              (should (equal (ellama-tools-agent-report-result-tool "Finished")
+                             "Result received. Plan-and-act loop completed.")))
+            (should (plist-get (ellama-tools--agent-state session)
+                               :completed))
+            (should (equal (plist-get (ellama-tools--agent-state session)
+                                      :result)
+                           "Finished"))
+            (should (equal (plist-get (ellama-session-extra session) :tools)
+                           (list base-tool)))
+            (with-current-buffer buffer
+              (should (string-match-p "Ellama Agent Done:"
+                                      (buffer-string))))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
 
 (ert-deftest test-ellama-subagent-loop-handler-max-steps-and-continue ()
   (ellama-test--ensure-local-ellama-tools)

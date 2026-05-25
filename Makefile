@@ -1,6 +1,6 @@
 # Makefile for ellama project
 
-.PHONY: build test test-detailed test-integration test-srt-integration docker-build-srt-parity test-srt-integration-linux check-compile-warnings checkdocs manual format-elisp refill-news refill-readme
+.PHONY: build test test-detailed test-integration test-srt-integration docker-build-srt-parity test-srt-integration-linux check-compile-warnings checkdocs manual format-elisp install-git-hooks refill-news refill-readme check-elisp check-readme check-news
 
 SRT_PARITY_DOCKER_IMAGE ?= ellama-srt-parity:latest
 SRT_PARITY_DOCKERFILE ?= docker/srt-parity-linux.Dockerfile
@@ -113,10 +113,23 @@ manual:
 format-elisp:
 	emacs -batch --eval "(setq load-prefer-newer t)" --eval "(let ((files (append (file-expand-wildcards \"ellama*.el\") (file-expand-wildcards \"tests/*.el\")))) (package-initialize) (require 'transient) (dolist (file files) (with-current-buffer (find-file-noselect file) (emacs-lisp-mode) (indent-region (point-min) (point-max)) (untabify (point-min) (point-max)) (delete-trailing-whitespace) (save-buffer))))"
 
-refill-org := "(setq load-prefer-newer t) (with-current-buffer (find-file-noselect \"FILE\") (package-initialize) (require (quote org)) (require (quote org-element)) (setq fill-column 80) (save-excursion (org-with-wide-buffer (cl-loop for el in (reverse (org-element-map (org-element-parse-buffer) (quote (paragraph quote-block item)) (quote identity))) do (goto-char (org-element-property :contents-begin el)) (org-fill-paragraph)))) (save-buffer))"
+install-git-hooks:
+	mkdir -p .git/hooks
+	cp scripts/git-hooks/pre-commit .git/hooks/pre-commit
+	cp scripts/git-hooks/pre-push .git/hooks/pre-push
+	chmod +x .git/hooks/pre-commit .git/hooks/pre-push
+
+refill-org := "(progn (setq load-prefer-newer t) (with-current-buffer (find-file-noselect \"FILE\") (package-initialize) (require (quote org)) (require (quote org-element)) (setq fill-column 80) (save-excursion (org-with-wide-buffer (cl-loop for el in (reverse (org-element-map (org-element-parse-buffer) (quote (paragraph quote-block item)) (quote identity))) do (goto-char (org-element-property :contents-begin el)) (org-fill-paragraph)))) (save-buffer)))"
+refill-news-org := "(progn (setq load-prefer-newer t) (package-initialize) (require (quote org)) (require (quote org-element)) (with-current-buffer (find-file-noselect \"./NEWS.org\") (setq fill-column 80) (save-excursion (save-restriction (goto-char (point-min)) (org-narrow-to-subtree) (cl-loop for el in (reverse (org-element-map (org-element-parse-buffer) (quote (paragraph quote-block item)) (quote identity))) do (goto-char (or (org-element-property :contents-begin el) (org-element-property :begin el))) (org-fill-paragraph)))) (save-buffer)))"
 
 refill-news:
-	emacs -batch --eval $(subst FILE,./NEWS.org,$(refill-org))
+	emacs -batch --eval $(refill-news-org)
 
 refill-readme:
 	emacs -batch --eval $(subst FILE,./README.org,$(refill-org))
+
+check-elisp: format-elisp build test check-compile-warnings checkdocs
+
+check-readme: refill-readme manual
+
+check-news: refill-news

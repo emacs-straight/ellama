@@ -1,3 +1,93 @@
+* Version 1.24.0
+- Added plan-and-act agent loop for multi-agent code generation workflows.
+- Added plan-and-act agent to transient menu for easy access.
+- Added support for resuming plan-and-act after interruption.
+- Formatted plan-and-act tool arguments for better reliability.
+- Fixed plan-and-act test root path for correct test execution.
+- Documented plan-and-act agent loop functionality.
+* Version 1.23.0
+
+- Add optional ~timeout~ support to ~shell_command~ with a default of five
+  seconds. Long-running async shell commands are terminated when the timeout
+  expires and return a timeout message with any collected output.
+- Add optional ~timeout~ support to ~grep~ with the same five-second default.
+  Directory searches now use timeout-aware command execution and return a clear
+  diagnostic when grep exceeds the configured limit.
+- Add optional ~timeout~ support to ~directory_tree~ with the same five-second
+  default. Recursive directory traversal now stops when the timeout expires and
+  returns a clear diagnostic with the partial tree collected so far.
+- Strengthen project git hook templates for local Elisp validation. Staged Elisp
+  changes now run ~make checkdocs~ before commit, while pushed Elisp changes run
+  ~make check-elisp~ and block the push if formatting changes files.
+
+* Version 1.22.1
+
+- Remove experimental hypothesis profiles (numbered-read, line-edit,
+  numbered-line-edit) and their associated tools including ~edit_lines~,
+  ~ellama-eval-edit-lines-tool~, ~ellama-eval-monitored-edit-lines-tool~,
+  ~ellama-eval-numbered-read-file-tool~, and
+  ~ellama-eval-numbered-lines-range-tool~. Delete corresponding helper
+  functions: ~ellama-eval--line-edit-candidate~,
+  ~ellama-eval--number-text-lines~, ~ellama-eval--replace-profile-read-specs~,
+  and profile classifiers ~ellama-eval--profile-numbered-read-p~,
+  ~ellama-eval--profile-line-edit-p~,
+  ~ellama-eval--profile-balanced-edit-p~. Net change: -208 lines.
+- Unify ~ellama-eval--profile-tool-names~ to unconditionally append ~edit_file~
+  to the base tool list for all profiles (baseline and balanced-edit), removing
+  profile-specific matching logic.
+- Restore profile validation in ~ellama-eval--profile-tool-names~ to properly
+  reject unknown or misspelled profile names with an error, fixing the unused
+  lexical argument warning reported by CI.
+- Add policy forbidding direct integration into ~main~ branch; require feature
+  branches and pull requests instead of direct pushes.
+- Force ~cat~ pager for shell commands and shared command helpers, adding tests
+  to verify pager environment across all shell execution paths.
+* Version 1.22.0
+
+- Added read-before-write safety for mutating tools. Session-local read tracking
+  now requires that existing files be read before being overwritten; the first
+  overwrite attempt of an existing file is refused with instructions to read the
+  file first, and the second attempt is allowed for deliberate overwrites. This
+  applies to ~write-file~, ~append-to-file~, ~prepend-to-file~, ~move-file~, and
+  ~edit-file~ tools. Also enhances output truncation messages with concrete next
+  tool call suggestions including specific line ranges via ~lines_range~.
+
+- Added git hooks to prevent commits and pushes to the ~main~ branch. Created
+  pre-commit and pre-push hooks that block operations when on ~main~, providing
+  clear error messages and instructions to use feature branches instead. Added
+  ~install-git-hooks~ Makefile target to automate hook installation.
+
+- Fixed read-before-write CI failures by using direct ~ellama-session~ struct
+  slot assignment for tool session extra updates, ensuring read-before-write
+  bookkeeping works on older Emacs versions. Updated the output line budget test
+  to assert the new concrete ~lines_range~ hint instead of the removed generic
+  wording.
+* Version 1.21.0
+- Added project-local before and after shell hook support around mutating edit
+  tools, including per-hook output visibility, failure reporting, hook
+  environment context, and independent sectioned output budgets.
+- Added root .codex hook scripts and ~.dir-locals.el~ configuration so edit
+  tools block writes on main and run file-specific checks after edits. Added
+  aggregate Makefile targets for Elisp, README, and NEWS validation.
+- Updated ~grep~ and ~grep_in_file~ to pass ~-i~ unless ~case_sensitive~ is
+  explicitly set.
+- Removed hook details, skill paths, and automatically checked style guidance
+  from AGENTS.md. Moved release-specific changelog workflow details into the
+  project-local changelog skill.
+- Changed the MELPA CI glob from all top-level .el files to ~ellama*.el~ so
+  ~.dir-locals.el~ is not loaded as a package source file.
+* Version 1.20.0
+- Add ~balanced-edit~ evaluation profile to validate edits in real Emacs
+  buffers.
+- Improve tool diagnostics, providing clearer messages for missing files, paths,
+  and invalid line ranges.
+- Expand and improve test coverage for nested Elisp edit evaluation cases.
+- Refactor evaluation harness to use a generic model selector.
+- Enhance file-mutating tools with default-on syntax validation.
+- Normalize Org block markers in translated output.
+- Move evaluation fixtures out of the main code.
+- Fix indentation in response handler callbacks.
+
 * Version 1.19.3
 - Prevented duplicate session requests while a generation or compaction is
   already active.  Repeating ~C-c C-c~ in a chat buffer now leaves the buffer

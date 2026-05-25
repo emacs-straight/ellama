@@ -1,0 +1,67 @@
+#!/bin/sh
+set -eu
+
+branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || printf '')
+
+if [ "$branch" = "main" ]; then
+	cat >&2 <<'EOF'
+Push blocked: current branch is main.
+
+Switch to a feature branch first:
+  git switch <branch-name>
+EOF
+	exit 1
+fi
+
+zero_sha=0000000000000000000000000000000000000000
+changed_files=$(mktemp)
+changed_files_sorted=$(mktemp)
+
+cleanup() {
+	rm -f "$changed_files" "$changed_files_sorted"
+}
+
+trap cleanup EXIT
+
+while read local_ref local_sha _remote_ref remote_sha
+do
+	if [ "$local_ref" = "refs/heads/main" ]; then
+		cat >&2 <<'EOF'
+Push blocked: refusing to push refs/heads/main.
+
+Push a feature branch instead.
+EOF
+		exit 1
+	fi
+
+	if [ "$local_sha" = "$zero_sha" ]; then
+		continue
+	fi
+
+	if [ "$remote_sha" = "$zero_sha" ]; then
+		base=$(git merge-base "$local_sha" main 2>/dev/null || printf '')
+		if [ -n "$base" ]; then
+			range="$base..$local_sha"
+		else
+			range="$local_sha"
+		fi
+	else
+		range="$remote_sha..$local_sha"
+	fi
+
+	git diff --name-only --diff-filter=ACMR "$range" -- \
+		'*.el' README.org NEWS.org >>"$changed_files"
+done
+
+if [ -s "$changed_files" ]; then
+	sort -u "$changed_files" >"$changed_files_sorted"
+	set --
+	while IFS= read -r file
+	do
+		set -- "$@" "$file"
+	done <"$changed_files_sorted"
+
+	ELLAMA_BLOCK_ON_CHECK_CHANGES=1 sh .codex/hooks/check-files.sh "$@"
+fi
+
+exit 0

@@ -1,100 +1,95 @@
-1 Version 1.19.3
+1 Version 1.24.0
 ════════════════
 
-  • Prevented duplicate session requests while a generation or
-    compaction is already active.  Repeating `C-c C-c' in a chat buffer
-    now leaves the buffer unchanged instead of sending the same prompt
-    twice.
+  • Added plan-and-act agent loop for multi-agent code generation
+    workflows.
+  • Added plan-and-act agent to transient menu for easy access.
+  • Added support for resuming plan-and-act after interruption.
+  • Formatted plan-and-act tool arguments for better reliability.
+  • Fixed plan-and-act test root path for correct test execution.
+  • Documented plan-and-act agent loop functionality.
 
 
-2 Version 1.19.2
+2 Version 1.23.0
 ════════════════
 
-  • Improved session compaction for short but oversized histories.  When
-    `ellama-session-auto-compact-keep-last-turns' cannot be satisfied,
-    compaction can now keep fewer recent turns and still summarize the
-    available history instead of failing with "Not enough session
-    history to compact".
-  • Added `ellama-session-auto-compact-allow-fewer-kept-turns' to
-    control this behavior.  It is enabled by default and applies to both
-    automatic and manually triggered session compaction.
-  • Added a distinct oversized-context compaction notice so users can
-    see when Ellama kept fewer recent turns than configured.
-  • Deferred response completion callbacks until automatic compaction
-    finishes.  This keeps sub-agent loops running after compaction
-    succeeds or fails.
-  • Resolved deferred compaction callbacks against the current
-    registered session buffer before running done handlers.  This
-    prevents stale chat buffers from being reused after compaction
-    rewrites or replaces session buffers.
-  • Wrapped inserted compaction notices using the same paragraph filling
-    behavior as chat output, so long compaction messages no longer
-    appear as one long line.
+  • Add optional `timeout' support to `shell_command' with a default of
+    five seconds. Long-running async shell commands are terminated when
+    the timeout expires and return a timeout message with any collected
+    output.
+  • Add optional `timeout' support to `grep' with the same five-second
+    default.  Directory searches now use timeout-aware command execution
+    and return a clear diagnostic when grep exceeds the configured
+    limit.
+  • Add optional `timeout' support to `directory_tree' with the same
+    five-second default. Recursive directory traversal now stops when
+    the timeout expires and returns a clear diagnostic with the partial
+    tree collected so far.
+  • Strengthen project git hook templates for local Elisp
+    validation. Staged Elisp changes now run `make checkdocs' before
+    commit, while pushed Elisp changes run `make check-elisp' and block
+    the push if formatting changes files.
 
 
-3 Version 1.19.1
+3 Version 1.22.1
 ════════════════
 
-  • Stop installing global `llm-provider-chat-request' sanitizer advice.
-    Ellama now avoids rewriting request payloads from unrelated `llm'
-    clients after Ellama is loaded.
-  • Require `llm' 0.30.2 so Ellama can rely on upstream JSON
-    serialization and OpenAI-compatible tool-call argument fixes instead
-    of a global compatibility workaround.
+  • Remove experimental hypothesis profiles (numbered-read, line-edit,
+    numbered-line-edit) and their associated tools including
+    `edit_lines', `ellama-eval-edit-lines-tool',
+    `ellama-eval-monitored-edit-lines-tool',
+    `ellama-eval-numbered-read-file-tool', and
+    `ellama-eval-numbered-lines-range-tool'. Delete corresponding helper
+    functions: `ellama-eval--line-edit-candidate',
+    `ellama-eval--number-text-lines',
+    `ellama-eval--replace-profile-read-specs', and profile classifiers
+    `ellama-eval--profile-numbered-read-p',
+    `ellama-eval--profile-line-edit-p',
+    `ellama-eval--profile-balanced-edit-p'. Net change: -208 lines.
+  • Unify `ellama-eval--profile-tool-names' to unconditionally append
+    `edit_file' to the base tool list for all profiles (baseline and
+    balanced-edit), removing profile-specific matching logic.
+  • Restore profile validation in `ellama-eval--profile-tool-names' to
+    properly reject unknown or misspelled profile names with an error,
+    fixing the unused lexical argument warning reported by CI.
+  • Add policy forbidding direct integration into `main' branch; require
+    feature branches and pull requests instead of direct pushes.
+  • Force `cat' pager for shell commands and shared command helpers,
+    adding tests to verify pager environment across all shell execution
+    paths.
 
 
-4 Version 1.19.0
+4 Version 1.22.0
 ════════════════
 
-  • Add an evaluation harness for comparing agent tool designs with
-    local models.  The new suite covers numbered read output, line-range
-    editing, trace collection, JSONL export, profile comparisons,
-    summaries, and interactive nonblocking runs.
-  • Improve evaluation reliability by stabilizing JSONL output paths,
-    avoiding active buffer overwrites, serializing nested result data
-    correctly, counting worker steps consistently, and relaxing
-    docstring checks so valid implementation edits are not rejected for
-    harmless wording changes.
-  • Improve tool output for local models by rendering single-entry
-    `directory_tree' results without misleading branch prefixes and by
-    formatting tool-result alists as readable named blocks instead of
-    raw S-expressions.
-  • Fix search and project tools by returning `default-directory' from
-    `project_root' when no project is detected, explaining empty `grep'
-    results, supporting string tool result names, and resolving relative
-    grep directories against the current buffer directory.
-  • Fix subagent buffer insertion so continuation turns append to the
-    worker buffer, leave a blank line before each `Main agent:' prompt,
-    and render `<think>' blocks as Org quote blocks in Org buffers.
-  • Prefer newer Elisp source files during batch jobs to prevent stale
-    bytecode from shadowing local edits in build, test, documentation,
-    formatting, and refill targets.
+  • Added read-before-write safety for mutating tools. Session-local
+    read tracking now requires that existing files be read before being
+    overwritten; the first overwrite attempt of an existing file is
+    refused with instructions to read the file first, and the second
+    attempt is allowed for deliberate overwrites. This applies to
+    `write-file', `append-to-file', `prepend-to-file', `move-file', and
+    `edit-file' tools. Also enhances output truncation messages with
+    concrete next tool call suggestions including specific line ranges
+    via `lines_range'.
+
+  • Added git hooks to prevent commits and pushes to the `main'
+    branch. Created pre-commit and pre-push hooks that block operations
+    when on `main', providing clear error messages and instructions to
+    use feature branches instead. Added `install-git-hooks' Makefile
+    target to automate hook installation.
+
+  • Fixed read-before-write CI failures by using direct `ellama-session'
+    struct slot assignment for tool session extra updates, ensuring
+    read-before-write bookkeeping works on older Emacs versions. Updated
+    the output line budget test to assert the new concrete `lines_range'
+    hint instead of the removed generic wording.
 
 
-5 Version 1.18.0
+5 Version 1.21.0
 ════════════════
 
-  • Add optional Pandoc-backed Markdown to Org conversion.  Users can
-    configure `ellama-markdown-to-org-converter' to use the builtin
-    converter, Pandoc, or automatic Pandoc detection while Ellama keeps
-    the builtin converter as the default fallback when Pandoc is
-    unavailable or conversion fails.
-
-
-6 Version 1.17.2
-════════════════
-
-  • Fix JSON request sanitization for dotted pairs in provider
-    non-standard parameters.  OpenAI-compatible providers can now pass
-    options such as `:search_options ((search_strategy . "agent"))'
-    without triggering a `wrong-type-argument listp' error.
-
-
-7 Version 1.17.1
-════════════════
-
-  • Hide provider values in transient provider selection.  Provider
-    completion candidates now show safe labels based on provider
-    variable names instead of printed provider values, so secret-bearing
-    provider structs are not exposed.
+  • Added project-local before and after shell hook support around
+    mutating edit tools, including per-hook output visibility, failure
+    reporting, hook environment context, and independent sectioned
+    output budgets.
   …  …
