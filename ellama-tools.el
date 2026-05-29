@@ -66,6 +66,13 @@
 
 (defvar ellama-tools-enabled nil
   "List of tools that have been enabled.")
+(defcustom ellama-tools-read-before-write-enabled t
+  "Require a session-local read before overwriting existing files.
+When non-nil, full-file mutating tools refuse their first attempt to change an
+existing file that has not been read in the current Ellama tool session.  The
+next attempt is allowed so deliberate overwrites remain possible."
+  :type 'boolean
+  :group 'ellama)
 
 (defvar ellama-tools--current-session nil
   "Current Ellama session used while executing tools.")
@@ -197,14 +204,6 @@ Use `image' to force image handling."
   :type 'number
   :group 'ellama)
 
-(defcustom ellama-tools-read-before-write-enabled t
-  "Require a session-local read before overwriting existing files.
-When non-nil, full-file mutating tools refuse their first attempt to change an
-existing file that has not been read in the current Ellama tool session.  The
-next attempt is allowed so deliberate overwrites remain possible."
-  :type 'boolean
-  :group 'ellama)
-
 (defcustom ellama-tools-balanced-edit-enabled t
   "Validate code syntax before tools write file contents.
 When non-nil, mutating file tools reject edits whose resulting buffer has
@@ -269,6 +268,24 @@ Plist with keys `:path', `:mtime' and `:policy'.")
 
 (defcustom ellama-tools-subagent-default-max-steps 30
   "Default maximum number of auto-continue steps for a sub-agent."
+  :type 'integer
+  :group 'ellama)
+
+(defcustom ellama-tools-subagent-loop-detection-enabled t
+  "Detect repeated identical tool calls in sub-agent sessions.
+When non-nil, sub-agent tools return recovery guidance on repeated identical
+calls and terminate the subtask if the same consecutive call chain continues."
+  :type 'boolean
+  :group 'ellama)
+
+(defcustom ellama-tools-subagent-loop-detection-repeated-threshold 2
+  "Number of consecutive identical sub-agent tool calls that triggers recovery.
+Values below 2 are treated as 2 so the first call is never considered a loop."
+  :type 'integer
+  :group 'ellama)
+
+(defcustom ellama-tools-subagent-loop-detection-max-traces 50
+  "Maximum recent sub-agent tool calls retained for loop detection."
   :type 'integer
   :group 'ellama)
 
@@ -1884,6 +1901,10 @@ Return error message on denial when `ellama-tools-use-srt' is non-nil."
           (format "srt policy denied %s access to %s (target %s) using %s: %s"
                   op path target config-path reason))))))
 
+(defun ellama-tools--shell-quote-command (program args)
+  "Return shell command string for PROGRAM with ARGS."
+  (mapconcat #'shell-quote-argument (cons program args) " "))
+
 (defun ellama-tools--command-argv (program &rest args)
   "Return argv for PROGRAM and ARGS.
 Wrap command with `srt' when `ellama-tools-use-srt' is non-nil."
@@ -1896,7 +1917,10 @@ Wrap command with `srt' when `ellama-tools-use-srt' is non-nil."
           "Cannot find `srt' executable `%s'.  Install sandbox-runtime "
           "or disable `ellama-tools-use-srt'")
          ellama-tools-srt-program))
-      (append (list srt-path) ellama-tools-srt-args (cons program args)))))
+      (append
+       (list srt-path)
+       ellama-tools-srt-args
+       (list "-c" (ellama-tools--shell-quote-command program args))))))
 
 (defun ellama-tools--process-environment-with-cat-pager (&optional env)
   "Return ENV with shell command pagers forced to cat."
@@ -2130,6 +2154,71 @@ MODE can be `auto', `text' or `image'."
          :error (error-message-string err))
    (ellama-tools--diagnostic-location (point))))
 
+(defun ellama-tools--remove-unexpected-closers-in-buffer ()
+  "Remove unexpected closing delimiters from the current buffer.
+Returns the number of characters removed, or nil if none found."
+  (when (fboundp 'syntax-propertize)
+    (syntax-propertize (point-max)))
+  (let ((unexpected-pos))
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (let* ((pos (point))
+               (syntax (syntax-after pos))
+               (class (and syntax (syntax-class syntax)))
+               (state (syntax-ppss pos)))
+          (when (and (eq class 5)
+                     (not (nth 3 state))
+                     (not (nth 4 state)))
+            (unless (nth 1 state)
+              (push pos unexpected-pos))))
+        (forward-char 1)))
+    (let ((count (length unexpected-pos)))
+      (when (and count (cl-plusp count))
+        (dolist (pos (sort unexpected-pos #'<))
+          (goto-char pos)
+          (delete-char 1))
+        count))))
+
+(defun ellama-tools--try-fix-unexpected-closers (text file-name)
+  "Try to fix TEXT by removing unexpected closers in FILE-NAME context.
+Returns a plist with :text (fixed or original), :auto-fixed (t if fixed),
+and :validation (re-validation result of returned text)."
+  (let ((buffer (find-file-noselect file-name)))
+    (with-current-buffer buffer
+      (let ((original (buffer-string))
+            (modified (buffer-modified-p))
+            (point-pos (point))
+            (buffer-undo-list t)
+            (inhibit-modification-hooks t)
+            (inhibit-read-only t))
+        (unwind-protect
+            (progn
+              (erase-buffer)
+              (insert text)
+              (let ((removed (ellama-tools--remove-unexpected-closers-in-buffer)))
+                (if (and removed (cl-plusp removed))
+                    (let* ((fixed-text (buffer-string))
+                           (re-validation (ellama-tools--syntax-validation-current-buffer)))
+                      (if (plist-get re-validation :valid)
+                          (list :text fixed-text
+                                :auto-fixed t
+                                :validation re-validation)
+                        (let ((original-validation (ellama-tools--syntax-validation-current-buffer)))
+                          (erase-buffer)
+                          (insert text)
+                          (list :text text
+                                :auto-fixed nil
+                                :validation original-validation))))
+                  (let ((validation (ellama-tools--syntax-validation-current-buffer)))
+                    (list :text text
+                          :auto-fixed nil
+                          :validation validation)))))
+          (erase-buffer)
+          (insert original)
+          (goto-char (max (point-min) (min point-pos (point-max))))
+          (set-buffer-modified-p modified))))))
+
 (defun ellama-tools--check-parens-diagnostic ()
   "Return `check-parens' diagnostic for the current buffer."
   (condition-case err
@@ -2327,41 +2416,63 @@ MODE can be `auto', `text' or `image'."
   "Return OPERATION rejection for FILE-NAME and VALIDATION results.
 CANDIDATE-VALIDATION, ORIGINAL-VALIDATION, OLD-VALIDATION and
 NEW-VALIDATION are syntax validation results."
-  (format
-   (concat
-    "%s rejected: resulting buffer has unbalanced delimiters or "
-    "invalid syntax.\n\n"
-    "File: %s\n"
-    "Mode: %s\n"
-    "Check: %s\n"
-    "Error: %s\n"
-    "Position: line %d, column %d\n\n"
-    "%s\n\n"
-    "Original file status: %s\n"
-    "Old fragment standalone status: %s\n"
-    "New fragment standalone status: %s\n\n"
-    "%s\n"
-    "Instruction: retry the operation. Keep the requested semantic change, "
-    "but provide text whose delimiters are balanced in %s.")
-   operation
-   file-name
-   (plist-get candidate-validation :mode)
-   (plist-get candidate-validation :check)
-   (plist-get candidate-validation :error)
-   (plist-get candidate-validation :line)
-   (plist-get candidate-validation :column)
-   (plist-get candidate-validation :nearby)
-   (ellama-tools--validation-status original-validation)
-   (ellama-tools--validation-status old-validation)
-   (ellama-tools--validation-status new-validation)
-   (ellama-tools--format-delimiter-balance
-    (plist-get candidate-validation :balance))
-   (plist-get candidate-validation :mode)))
+  (let* ((balance (plist-get candidate-validation :balance))
+         (missing-closers (plist-get balance :opens))
+         (has-missing (and missing-closers (seq-first missing-closers)))
+         (instruction
+          (if has-missing
+              (format
+               "You have unclosed delimiters. You need to add %s.
+%s"
+               (string-join
+                (mapcar (lambda (entry)
+                          (ellama-tools--format-missing-closer entry))
+                        (seq-take missing-closers 5)))
+               (format
+                (concat
+                 "Retry the operation. Keep the requested semantic change, "
+                 "but add the missing closers so that delimiters are balanced in %s.")
+                (plist-get candidate-validation :mode)))
+            (format
+             (concat
+              "Retry the operation. Keep the requested semantic change, "
+              "but provide text whose delimiters are balanced in %s.")
+             (plist-get candidate-validation :mode)))))
+    (format
+     (concat
+      "%s rejected: resulting buffer has unbalanced delimiters or "
+      "invalid syntax.\n\n"
+      "File: %s\n"
+      "Mode: %s\n"
+      "Check: %s\n"
+      "Error: %s\n"
+      "Position: line %d, column %d\n\n"
+      "%s\n\n"
+      "Original file status: %s\n"
+      "Old fragment standalone status: %s\n"
+      "New fragment standalone status: %s\n\n"
+      "%s\n\n"
+      "Instruction: %s")
+     operation
+     file-name
+     (plist-get candidate-validation :mode)
+     (plist-get candidate-validation :check)
+     (plist-get candidate-validation :error)
+     (plist-get candidate-validation :line)
+     (plist-get candidate-validation :column)
+     (plist-get candidate-validation :nearby)
+     (ellama-tools--validation-status original-validation)
+     (ellama-tools--validation-status old-validation)
+     (ellama-tools--validation-status new-validation)
+     (ellama-tools--format-delimiter-balance balance)
+     instruction)))
 
 (defun ellama-tools--balanced-edit-check-candidate
     (operation file-name candidate &optional original old-fragment new-fragment)
   "Return validation decision for OPERATION writing CANDIDATE to FILE-NAME.
-ORIGINAL, OLD-FRAGMENT and NEW-FRAGMENT provide optional diagnostic context."
+ORIGINAL, OLD-FRAGMENT and NEW-FRAGMENT provide optional diagnostic context.
+Decision plist contains :checked, :valid, :rejection, :auto-fixed,
+and :fixed-text fields."
   (let* ((candidate-validation
           (ellama-tools--validate-text-in-file-buffer file-name candidate))
          (checked-p (plist-get candidate-validation :checked))
@@ -2376,10 +2487,23 @@ ORIGINAL, OLD-FRAGMENT and NEW-FRAGMENT provide optional diagnostic context."
          (new-validation
           (when new-fragment
             (ellama-tools--validate-text-in-file-buffer file-name
-                                                        new-fragment))))
+                                                        new-fragment)))
+         (fix-result nil)
+         (auto-fixed nil)
+         (fixed-text nil))
+    (when (and checked-p (not valid-p))
+      (setq fix-result
+            (ellama-tools--try-fix-unexpected-closers candidate file-name))
+      (setq auto-fixed (plist-get fix-result :auto-fixed))
+      (setq fixed-text (plist-get fix-result :text))
+      (setq valid-p (plist-get (plist-get fix-result :validation) :valid))
+      (when auto-fixed
+        (setq candidate-validation (plist-get fix-result :validation))))
     (list
      :checked checked-p
      :valid valid-p
+     :auto-fixed auto-fixed
+     :fixed-text (and auto-fixed fixed-text)
      :rejection
      (when (and checked-p (not valid-p))
        (ellama-tools--format-balanced-edit-rejection
@@ -2388,9 +2512,11 @@ ORIGINAL, OLD-FRAGMENT and NEW-FRAGMENT provide optional diagnostic context."
 
 (defun ellama-tools--balanced-edit-success-suffix (decision)
   "Return success message suffix for validation DECISION."
-  (if (plist-get decision :checked)
-      " after syntax validation"
-    ""))
+  (if (plist-get decision :auto-fixed)
+      " after syntax validation (auto-fixed unexpected closers)"
+    (if (plist-get decision :checked)
+        " after syntax validation"
+      "")))
 
 (defun ellama-tools--edit-shell-hooks-buffer (file-name)
   "Return buffer used to read edit shell hooks for FILE-NAME."
@@ -2613,13 +2739,19 @@ buffer contents, matching their historical behavior."
                  (decision
                   (ellama-tools--balanced-edit-check-candidate
                    "Write" file-name content original nil content))
-                 (rejection (plist-get decision :rejection)))
+                 (rejection (plist-get decision :rejection))
+                 (auto-fixed (plist-get decision :auto-fixed))
+                 (fixed-text (plist-get decision :fixed-text))
+                 (text-to-write (if (and auto-fixed fixed-text)
+                                    fixed-text
+                                  content)))
             (if rejection
                 rejection
               (ellama-tools--run-edit-with-shell-hooks
                "write_file" "write" file-name
                (lambda ()
-                 (ellama-tools--write-file-buffer-content file-name content))
+                 (ellama-tools--write-file-buffer-content
+                  file-name text-to-write))
                (format "Wrote %d characters to %s%s."
                        (length content)
                        file-name
@@ -2664,13 +2796,19 @@ buffer contents, matching their historical behavior."
                  (decision
                   (ellama-tools--balanced-edit-check-candidate
                    "Append" file-name candidate original nil content))
-                 (rejection (plist-get decision :rejection)))
+                 (rejection (plist-get decision :rejection))
+                 (auto-fixed (plist-get decision :auto-fixed))
+                 (fixed-text (plist-get decision :fixed-text))
+                 (text-to-write (if (and auto-fixed fixed-text)
+                                    fixed-text
+                                  candidate)))
             (if rejection
                 rejection
               (ellama-tools--run-edit-with-shell-hooks
                "append_file" "append" file-name
                (lambda ()
-                 (ellama-tools--write-file-buffer-content file-name candidate))
+                 (ellama-tools--write-file-buffer-content
+                  file-name text-to-write))
                (format "Appended %d characters to %s%s."
                        (length content)
                        file-name
@@ -2715,13 +2853,19 @@ buffer contents, matching their historical behavior."
                  (decision
                   (ellama-tools--balanced-edit-check-candidate
                    "Prepend" file-name candidate original nil content))
-                 (rejection (plist-get decision :rejection)))
+                 (rejection (plist-get decision :rejection))
+                 (auto-fixed (plist-get decision :auto-fixed))
+                 (fixed-text (plist-get decision :fixed-text))
+                 (text-to-write (if (and auto-fixed fixed-text)
+                                    fixed-text
+                                  candidate)))
             (if rejection
                 rejection
               (ellama-tools--run-edit-with-shell-hooks
                "prepend_file" "prepend" file-name
                (lambda ()
-                 (ellama-tools--write-file-buffer-content file-name candidate))
+                 (ellama-tools--write-file-buffer-content
+                  file-name text-to-write))
                (format "Prepended %d characters to %s%s."
                        (length content)
                        file-name
@@ -2917,14 +3061,19 @@ Replace OLDCONTENT with NEWCONTENT."
                  (decision
                   (ellama-tools--balanced-edit-check-candidate
                    "Edit" file-name candidate content oldcontent newcontent))
-                 (rejection (plist-get decision :rejection)))
+                 (rejection (plist-get decision :rejection))
+                 (auto-fixed (plist-get decision :auto-fixed))
+                 (fixed-text (plist-get decision :fixed-text))
+                 (text-to-write (if (and auto-fixed fixed-text)
+                                    fixed-text
+                                  candidate)))
             (if rejection
                 rejection
               (ellama-tools--run-edit-with-shell-hooks
                "edit_file" "edit" file-name
                (lambda ()
                  (ellama-tools--write-file-buffer-content
-                  file-name candidate))
+                  file-name text-to-write))
                (format "Edited %s%s."
                        file-name
                        (ellama-tools--balanced-edit-success-suffix
@@ -3068,6 +3217,12 @@ TIMEOUT is the optional command timeout in seconds."
   (unless case-sensitive
     '("-i")))
 
+(defun ellama-tools--grep-search-args (case-sensitive)
+  "Return grep arguments for literal CASE-SENSITIVE matching."
+  (append
+   (ellama-tools--grep-case-args case-sensitive)
+   '("-F")))
+
 (defun ellama-tools-grep-tool (dir search-string &optional case-sensitive timeout)
   "Grep SEARCH-STRING in DIR files.
 Match case-insensitively unless CASE-SENSITIVE is non-nil.
@@ -3088,7 +3243,7 @@ TIMEOUT is the optional command timeout in seconds."
            (append
             (list timeout
                   "find" "." "-type" "f" "-exec" "grep" "--color=never")
-            (ellama-tools--grep-case-args case-sensitive)
+            (ellama-tools--grep-search-args case-sensitive)
             (list "-nH" "-e" search-string "{}" "+")))
           (format "No matches for %S in %s."
                   search-string
@@ -3150,8 +3305,8 @@ Match case-insensitively unless CASE-SENSITIVE is non-nil."
              #'ellama-tools--call-command
              (append
               (list "grep" "--color=never")
-              (ellama-tools--grep-case-args case-sensitive)
-              (list "-nh" search-string truename)))
+              (ellama-tools--grep-search-args case-sensitive)
+              (list "-nh" "-e" search-string truename)))
             (format "No matches for %S in %s."
                     search-string truename))))))))
 
@@ -4077,6 +4232,141 @@ CALLBACK will be used to report result asyncronously."
     :description "Report final result and terminate the task."
     :args ((:name "result" :type string))))
 
+(defun ellama-tools--subagent-loop-state ()
+  "Return a fresh sub-agent tool loop state plist."
+  (list :tool-history nil
+        :loop-detected nil
+        :loop-reason ""
+        :loop-recovery-attempted nil
+        :loop-recovery-count 0
+        :loop-recovery-reason ""))
+
+(defun ellama-tools--subagent-complete (session result)
+  "Complete sub-agent SESSION with RESULT when it is still active."
+  (when-let* (((ellama-session-p session))
+              (extra (ellama-session-extra session))
+              ((not (plist-get extra :task-completed))))
+    (ellama-tools--set-session-extra
+     session
+     (plist-put (copy-sequence extra) :task-completed t))
+    (when-let* ((callback (plist-get extra :result-callback))
+                ((functionp callback)))
+      (funcall callback result))))
+
+(defun ellama-tools--subagent-loop-recovery-message
+    (name args result repeat-count)
+  "Return recovery guidance for repeated tool NAME with ARGS.
+RESULT is the latest tool result.  REPEAT-COUNT is the repeated call count."
+  (concat
+   (format
+    "LOOP RECOVERY: `%s` was called %d times with identical arguments.\n"
+    name repeat-count)
+   (format "Do not call `%s` again with these exact arguments: %S\n"
+           name args)
+   (format "Latest tool result:\n%s\n\n" result)
+   (if (equal name "edit_file")
+       "Next action: read the exact current file text with `read_file` \
+or `lines_range`, copy the exact oldcontent from that output, then call \
+`edit_file` with different oldcontent.  If you cannot identify an exact \
+replacement, call `report_result` with the blocker."
+     "Next action: choose a different tool call or different arguments \
+based on the latest result.  If no different useful action exists, call \
+`report_result` with the blocker.")))
+
+(defun ellama-tools--subagent-trace-tool-call
+    (session name args result)
+  "Record sub-agent tool call NAME with ARGS and RESULT for SESSION.
+Return recovery guidance or loop termination text when it should replace
+RESULT for the agent."
+  (when (and ellama-tools-subagent-loop-detection-enabled
+             (ellama-session-p session))
+    (let* ((extra (ellama-session-extra session))
+           (loop-state (or (plist-get extra :tool-loop-state)
+                           (ellama-tools--subagent-loop-state)))
+           (tool-history (or (plist-get loop-state :tool-history) (list)))
+           (threshold
+            (max 2 ellama-tools-subagent-loop-detection-repeated-threshold))
+           replacement)
+      (unless (plist-get extra :task-completed)
+        (let* ((repeated
+                (seq-take-while
+                 (lambda (history-entry)
+                   (and (equal (plist-get history-entry :name) name)
+                        (equal (plist-get history-entry :args) args)))
+                 tool-history))
+               (repeat-count (1+ (length repeated))))
+          (when (>= repeat-count threshold)
+            (let* ((recovery-count
+                    (or (plist-get loop-state :loop-recovery-count) 0))
+                   (loop-reason
+                    (format
+                     "Loop detected: tool %s called %d times with identical args"
+                     name repeat-count)))
+              (if (= repeat-count threshold)
+                  (progn
+                    (setq replacement
+                          (ellama-tools--subagent-loop-recovery-message
+                           name args result repeat-count))
+                    (setq loop-state
+                          (plist-put loop-state
+                                     :loop-recovery-attempted t))
+                    (setq loop-state
+                          (plist-put loop-state
+                                     :loop-recovery-count
+                                     (1+ recovery-count)))
+                    (setq loop-state
+                          (plist-put loop-state
+                                     :loop-recovery-reason loop-reason)))
+                (setq loop-state
+                      (plist-put loop-state :loop-detected t))
+                (setq loop-state
+                      (plist-put loop-state :loop-reason loop-reason))
+                (setq replacement loop-reason)
+                (ellama-tools--subagent-complete session loop-reason)))))
+        (push (list :name name :args args) tool-history)
+        (let ((max-traces ellama-tools-subagent-loop-detection-max-traces))
+          (when (> (length tool-history) max-traces)
+            (setf (nthcdr max-traces tool-history) nil)))
+        (setq loop-state (plist-put loop-state :tool-history tool-history))
+        (ellama-tools--set-session-extra
+         session
+         (ellama-tools--session-extra-with
+          session :tool-loop-state loop-state)))
+      replacement)))
+
+(defun ellama-tools--wrap-subagent-tool (tool session)
+  "Return TOOL wrapped with sub-agent loop detection for SESSION."
+  (let* ((wrapped-tool (copy-sequence tool))
+         (name (llm-tool-name tool))
+         (function (llm-tool-function tool))
+         (async (llm-tool-async tool)))
+    (setf
+     (llm-tool-function wrapped-tool)
+     (lambda (&rest args)
+       (if (and async args (functionp (car args)))
+           (let ((callback (car args))
+                 (call-args (cdr args)))
+             (apply
+              function
+              (lambda (result)
+                (funcall
+                 callback
+                 (or (ellama-tools--subagent-trace-tool-call
+                      session name call-args result)
+                     result)))
+              call-args))
+         (let ((result (apply function args)))
+           (or (ellama-tools--subagent-trace-tool-call
+                session name args result)
+               result)))))
+    wrapped-tool))
+
+(defun ellama-tools--wrap-subagent-tools (tools session)
+  "Return TOOLS wrapped with sub-agent loop detection for SESSION."
+  (mapcar (lambda (tool)
+            (ellama-tools--wrap-subagent-tool tool session))
+          tools))
+
 (defun ellama-tools--subagent-system-message (system-msg)
   "Return subagent system message from SYSTEM-MSG."
   (format
@@ -4184,6 +4474,8 @@ ARGUMENTS  – object with template substitution values."
 
                ;; ---- resolve tools for role ----
                (role-tools (ellama-tools--for-role role-key))
+               (subagent-tools
+                (ellama-tools--wrap-subagent-tools role-tools worker))
 
                ;; ---- dynamic report_result tool ----
                (report-tool
@@ -4192,7 +4484,7 @@ ARGUMENTS  – object with template substitution values."
                         callback worker)))
 
                ;; IMPORTANT: report tool must be first (termination tool priority)
-               (all-tools (cons report-tool role-tools)))
+               (all-tools (cons report-tool subagent-tools)))
 
           ;; ============================================================
           ;; Initialize session state (single source of truth)
@@ -4209,6 +4501,7 @@ ARGUMENTS  – object with template substitution values."
             :task-completed nil
             :step-count 0
             :max-steps steps-limit
+            :tool-loop-state (ellama-tools--subagent-loop-state)
             :system subagent-system))
 
           ;; ============================================================

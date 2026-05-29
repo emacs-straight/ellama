@@ -332,7 +332,37 @@ Return list with result and prompt."
       (should
        (equal
         (ellama-tools--command-argv "sh" "-c" "printf ok")
-        '("/tmp/fake-srt" "--debug" "sh" "-c" "printf ok"))))))
+        (list "/tmp/fake-srt"
+              "--debug"
+              "-c"
+              (ellama-tools--shell-quote-command
+               "sh" '("-c" "printf ok"))))))))
+
+(ert-deftest test-ellama-tools-command-argv-quotes-srt-command ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let ((ellama-tools-use-srt t)
+        (ellama-tools-srt-program "srt")
+        (ellama-tools-srt-args nil)
+        argv)
+    (cl-letf (((symbol-function 'executable-find)
+               (lambda (_program) "/tmp/fake-srt")))
+      (setq argv
+            (ellama-tools--command-argv
+             "grep" "--color=never" "-F" "-nh" "-e"
+             "(defconst ellama--code-prefix" "/tmp/ellama.el"))
+      (should
+       (equal
+        argv
+        (list "/tmp/fake-srt"
+              "-c"
+              (ellama-tools--shell-quote-command
+               "grep"
+               '("--color=never" "-F" "-nh" "-e"
+                 "(defconst ellama--code-prefix" "/tmp/ellama.el")))))
+      (should
+       (string-match-p
+        (regexp-quote "\\(defconst\\ ellama--code-prefix")
+        (nth 2 argv))))))
 
 (ert-deftest test-ellama-tools-call-command-uses-cat-pager ()
   (let ((process-environment (copy-sequence process-environment)))
@@ -716,7 +746,7 @@ Return list with result and prompt."
                      "\"a:1:match\"")))
     (should (equal captured
                    '(5 "find" "." "-type" "f" "-exec"
-                       "grep" "--color=never" "-i" "-nH" "-e"
+                       "grep" "--color=never" "-i" "-F" "-nH" "-e"
                        "match" "{}" "+")))))
 
 (ert-deftest test-ellama-tools-grep-tool-passes-timeout ()
@@ -750,7 +780,7 @@ Return list with result and prompt."
                      "\"a:1:Match\"")))
     (should (equal captured
                    '(5 "find" "." "-type" "f" "-exec"
-                       "grep" "--color=never" "-nH" "-e"
+                       "grep" "--color=never" "-F" "-nH" "-e"
                        "Match" "{}" "+")))))
 
 (ert-deftest test-ellama-tools-grep-tool-explains-no-matches ()
@@ -797,6 +827,19 @@ Return list with result and prompt."
       (when (file-exists-p dir)
         (delete-directory dir t)))))
 
+(ert-deftest test-ellama-tools-grep-tool-matches-literal-metacharacters ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let* ((dir (make-temp-file "ellama-grep-literal-" t))
+         (file (expand-file-name "sample.txt" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "value[0]\n"))
+          (should (equal (ellama-tools-grep-tool dir "value[0]")
+                         "\"./sample.txt:1:value[0]\"")))
+      (when (file-exists-p dir)
+        (delete-directory dir t)))))
+
 (ert-deftest test-ellama-tools-grep-in-file-tool-uses-shared-command-helper ()
   (ellama-test--ensure-local-ellama-tools)
   (let ((file (make-temp-file "ellama-grep-in-file-"))
@@ -816,7 +859,7 @@ Return list with result and prompt."
       (when (file-exists-p file)
         (delete-file file)))
     (should (equal captured
-                   (list "grep" "--color=never" "-i" "-nh"
+                   (list "grep" "--color=never" "-i" "-F" "-nh" "-e"
                          "hello" truename)))))
 
 (ert-deftest test-ellama-tools-grep-in-file-tool-can-match-case-sensitively ()
@@ -838,7 +881,7 @@ Return list with result and prompt."
       (when (file-exists-p file)
         (delete-file file)))
     (should (equal captured
-                   (list "grep" "--color=never" "-nh"
+                   (list "grep" "--color=never" "-F" "-nh" "-e"
                          "hello" truename)))))
 
 (ert-deftest test-ellama-tools-grep-in-file-tool-explains-no-matches ()
@@ -864,6 +907,18 @@ Return list with result and prompt."
             (insert "Needle\n"))
           (should (equal (ellama-tools-grep-in-file-tool "needle" file)
                          "\"1:Needle\"")))
+      (when (file-exists-p file)
+        (delete-file file)))))
+
+(ert-deftest test-ellama-tools-grep-in-file-tool-matches-literal-metacharacters ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let ((file (make-temp-file "ellama-grep-in-file-")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "value[0]\n"))
+          (should (equal (ellama-tools-grep-in-file-tool "value[0]" file)
+                         "\"1:value[0]\"")))
       (when (file-exists-p file)
         (delete-file file)))))
 
@@ -2518,16 +2573,21 @@ Return list with result and prompt."
             (insert original))
           (with-temp-file prepend-file
             (insert original))
+          ;; Unexpected closers are now auto-fixed, so append succeeds
           (let ((msg (ellama-tools-append-file-tool append-file ")")))
-            (should (string-match-p "Append rejected" msg))
-            (should (string-match-p "Unexpected closers" msg)))
+            (should (string-match-p "auto-fixed unexpected closers" msg)))
+          ;; Missing closers still block the edit
           (let ((msg (ellama-tools-prepend-file-tool prepend-file "(")))
             (should (string-match-p "Prepend rejected" msg))
             (should (string-match-p "Missing closers" msg)))
-          (dolist (file (list append-file prepend-file))
-            (with-temp-buffer
-              (insert-file-contents file)
-              (should (equal (buffer-string) original)))))
+          ;; Append file was auto-fixed to original content
+          (with-temp-buffer
+            (insert-file-contents append-file)
+            (should (equal (buffer-string) original)))
+          ;; Prepend file remains unchanged
+          (with-temp-buffer
+            (insert-file-contents prepend-file)
+            (should (equal (buffer-string) original))))
       (dolist (file (list append-file prepend-file))
         (when-let* ((buffer (get-file-buffer file)))
           (kill-buffer buffer))
@@ -3104,6 +3164,86 @@ END_ELLAMA_AGENT_STATE"))
       (when (buffer-live-p worker-buffer)
         (kill-buffer worker-buffer)))))
 
+(ert-deftest test-ellama-subagent-tool-loop-detection-completes-on-hard-loop ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let* ((callback-result nil)
+         (session
+          (make-ellama-session
+           :id "worker-loop-detection"
+           :extra (list :task-completed nil
+                        :result-callback
+                        (lambda (result)
+                          (setq callback-result result))
+                        :tool-loop-state
+                        (ellama-tools--subagent-loop-state))))
+         (tool-call-count 0)
+         (tool
+          (llm-make-tool
+           :name "read_file"
+           :function (lambda (&rest _args)
+                       (setq tool-call-count (1+ tool-call-count))
+                       "content")))
+         (wrapped (car (ellama-tools--wrap-subagent-tools
+                        (list tool) session)))
+         (function (llm-tool-function wrapped)))
+    (let ((ellama-tools-subagent-loop-detection-enabled t)
+          (ellama-tools-subagent-loop-detection-repeated-threshold 2))
+      (should (equal (funcall function "file.el" nil) "content"))
+      (should (string-match-p
+               "LOOP RECOVERY"
+               (funcall function "file.el" nil)))
+      (let ((hard-loop-result (funcall function "file.el" nil)))
+        (should (string-match-p
+                 "Loop detected: tool read_file called 3 times"
+                 hard-loop-result))
+        (should (equal callback-result hard-loop-result))
+        (should (plist-get (ellama-session-extra session) :task-completed))
+        (should (= tool-call-count 3))))))
+
+(ert-deftest test-ellama-subagent-tool-loop-detection-allows-repeat-after-progress ()
+  (ellama-test--ensure-local-ellama-tools)
+  (let* ((callback-result nil)
+         (session
+          (make-ellama-session
+           :id "worker-loop-recovery"
+           :extra (list :task-completed nil
+                        :result-callback
+                        (lambda (result)
+                          (setq callback-result result))
+                        :tool-loop-state
+                        (ellama-tools--subagent-loop-state))))
+         (read-tool
+          (llm-make-tool
+           :name "read_file"
+           :function (lambda (&rest _args) "content")))
+         (edit-tool
+          (llm-make-tool
+           :name "edit_file"
+           :function (lambda (&rest _args) "Edited file.el.")))
+         (wrapped-tools
+          (ellama-tools--wrap-subagent-tools
+           (list read-tool edit-tool) session))
+         (read-function (llm-tool-function (car wrapped-tools)))
+         (edit-function (llm-tool-function (cadr wrapped-tools))))
+    (let ((ellama-tools-subagent-loop-detection-enabled t)
+          (ellama-tools-subagent-loop-detection-repeated-threshold 2))
+      (should (equal (funcall read-function "file.el" nil) "content"))
+      (should (string-match-p
+               "LOOP RECOVERY"
+               (funcall read-function "file.el" nil)))
+      (should (equal (funcall edit-function "file.el" "old" "new")
+                     "Edited file.el."))
+      (should (equal (funcall read-function "file.el" nil) "content"))
+      (should (string-match-p
+               "LOOP RECOVERY"
+               (funcall read-function "file.el" nil)))
+      (should-not callback-result)
+      (should-not (plist-get (ellama-session-extra session) :task-completed))
+      (should (= (plist-get
+                  (plist-get (ellama-session-extra session) :tool-loop-state)
+                  :loop-recovery-count)
+                 2)))))
+
 (ert-deftest test-ellama-tools-task-tool-role-fallback-and-report-priority ()
   (ellama-test--ensure-local-ellama-tools)
   (let ((ellama--current-session-id "parent-1")
@@ -3172,8 +3312,11 @@ END_ELLAMA_AGENT_STATE"))
                    (llm-tool-name
                     (car (plist-get captured-extra :tools)))
                    "report_result"))
-          (should (eq (cadr (plist-get captured-extra :tools))
-                      role-tool))
+          (should (equal (llm-tool-name
+                          (cadr (plist-get captured-extra :tools)))
+                         "read_file"))
+          (should-not (eq (cadr (plist-get captured-extra :tools))
+                          role-tool))
           (with-current-buffer worker-buffer
             (should (string-match-p "Main agent:" (buffer-string)))
             (should (string-match-p "Do work" (buffer-string)))

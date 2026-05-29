@@ -1,95 +1,83 @@
-1 Version 1.24.0
+1 Version 1.26.0
 ════════════════
 
-  • Added plan-and-act agent loop for multi-agent code generation
-    workflows.
-  • Added plan-and-act agent to transient menu for easy access.
-  • Added support for resuming plan-and-act after interruption.
-  • Formatted plan-and-act tool arguments for better reliability.
-  • Fixed plan-and-act test root path for correct test execution.
-  • Documented plan-and-act agent loop functionality.
+  • Auto-fix unexpected closing delimiters in file edits. When syntax
+    validation fails due to unexpected closing delimiters (like extra
+    `)` or `]`), the system automatically removes them and accepts the
+    edit if the result is valid. This reduces friction for LLM-generated
+    edits that occasionally include spurious closers. Changes include
+    new functions `ellama-eval–remove-unexpected-closers-in-buffer` and
+    `ellama-tools–remove-unexpected-closers-in-buffer` to scan buffers
+    and remove closers without matching openers,
+    `ellama-eval–try-fix-unexpected-closers` and
+    `ellama-tools–try-fix-unexpected-closers` to attempt auto-fixing in
+    file context with safe buffer restoration, and integration of
+    auto-fixing into monitored-edit-file-tool and all balanced edit
+    tools.
+  • Add commit patch fallback for generate-commit-message. New functions
+    `ellama–in-commit-buffer` and `ellama–commit-patch` detect git
+    commit buffers and retrieve commit patches. Modified
+    `ellama-generate-commit-message` to use commit patch as a fallback
+    when no staged or unstaged diff is available, enabling proper commit
+    message generation in git-commit-mode reword or amend scenarios.
+  • Simplify test target in Makefile. Remove the inline test command
+    definition and make `test` an alias for `test-detailed`,
+    consolidating the test execution into a single target.
 
 
-2 Version 1.23.0
+2 Version 1.25.0
 ════════════════
 
-  • Add optional `timeout' support to `shell_command' with a default of
-    five seconds. Long-running async shell commands are terminated when
-    the timeout expires and return a timeout message with any collected
-    output.
-  • Add optional `timeout' support to `grep' with the same five-second
-    default.  Directory searches now use timeout-aware command execution
-    and return a clear diagnostic when grep exceeds the configured
-    limit.
-  • Add optional `timeout' support to `directory_tree' with the same
-    five-second default. Recursive directory traversal now stops when
-    the timeout expires and returns a clear diagnostic with the partial
-    tree collected so far.
-  • Strengthen project git hook templates for local Elisp
-    validation. Staged Elisp changes now run `make checkdocs' before
-    commit, while pushed Elisp changes run `make check-elisp' and block
-    the push if formatting changes files.
+  • Add loop detection to `ellama-eval' harness that identifies
+    repetitive tool call patterns indicating agents are stuck in
+    evaluation loops. The harness returns recovery guidance on the first
+    repeated identical tool call sequence, and falls back to hard loop
+    detection for repeated loops after recovery.  Configurable
+    defcustoms control the behavior:
+    `ellama-eval-loop-detection-enabled' (default: t),
+    `ellama-eval-loop-detection-repeated-threshold' (default: 2), and
+    `ellama-eval-loop-detection-max-traces' (default: 50).
+
+  • Move loop recovery into task subagents by wrapping role tools with
+    session-local repeated-call detection. Repeated identical tool calls
+    return recovery guidance at the configured threshold and complete
+    the subtask if the same consecutive chain continues. Document the
+    new subagent loop-detection settings in README.org.
+
+  • Extend evaluation cancellation with request context tracking. Store
+    the active request context on the session for streaming,
+    continuation, and compaction requests so that eval timeout
+    cancellation can target the correct context directly. Cancel active
+    eval worker requests when a run finishes with a non-completed
+    status, and register asynchronous session compaction requests in the
+    active request context so user cancellation and eval timeout stop
+    the compact request itself.
+
+  • Harden evaluation async buffer handling by scheduling timers from a
+    stable internal buffer so callbacks do not inherit transient
+    subagent buffers. Guard interactive summary rendering against stale
+    target-window errors and fall back to display-buffer.
+
+  • Render evaluation progress and final summaries into the selected
+    window for interactive runs, keeping the existing display-buffer
+    behavior as a fallback for noninteractive or stale-window calls.
+
+  • Preserve triggering tool calls in public traces and final
+    loop-detection results when loop detection triggers, and record
+    recovery metadata in tool traces so recovered passing runs remain
+    visible. Avoid false loop detection on later repeated reads by
+    treating the repeated-call threshold as the recovery point for the
+    current consecutive chain.
 
 
-3 Version 1.22.1
+3 Version 1.24.1
 ════════════════
 
-  • Remove experimental hypothesis profiles (numbered-read, line-edit,
-    numbered-line-edit) and their associated tools including
-    `edit_lines', `ellama-eval-edit-lines-tool',
-    `ellama-eval-monitored-edit-lines-tool',
-    `ellama-eval-numbered-read-file-tool', and
-    `ellama-eval-numbered-lines-range-tool'. Delete corresponding helper
-    functions: `ellama-eval--line-edit-candidate',
-    `ellama-eval--number-text-lines',
-    `ellama-eval--replace-profile-read-specs', and profile classifiers
-    `ellama-eval--profile-numbered-read-p',
-    `ellama-eval--profile-line-edit-p',
-    `ellama-eval--profile-balanced-edit-p'. Net change: -208 lines.
-  • Unify `ellama-eval--profile-tool-names' to unconditionally append
-    `edit_file' to the base tool list for all profiles (baseline and
-    balanced-edit), removing profile-specific matching logic.
-  • Restore profile validation in `ellama-eval--profile-tool-names' to
-    properly reject unknown or misspelled profile names with an error,
-    fixing the unused lexical argument warning reported by CI.
-  • Add policy forbidding direct integration into `main' branch; require
-    feature branches and pull requests instead of direct pushes.
-  • Force `cat' pager for shell commands and shared command helpers,
-    adding tests to verify pager environment across all shell execution
-    paths.
-
-
-4 Version 1.22.0
-════════════════
-
-  • Added read-before-write safety for mutating tools. Session-local
-    read tracking now requires that existing files be read before being
-    overwritten; the first overwrite attempt of an existing file is
-    refused with instructions to read the file first, and the second
-    attempt is allowed for deliberate overwrites. This applies to
-    `write-file', `append-to-file', `prepend-to-file', `move-file', and
-    `edit-file' tools. Also enhances output truncation messages with
-    concrete next tool call suggestions including specific line ranges
-    via `lines_range'.
-
-  • Added git hooks to prevent commits and pushes to the `main'
-    branch. Created pre-commit and pre-push hooks that block operations
-    when on `main', providing clear error messages and instructions to
-    use feature branches instead. Added `install-git-hooks' Makefile
-    target to automate hook installation.
-
-  • Fixed read-before-write CI failures by using direct `ellama-session'
-    struct slot assignment for tool session extra updates, ensuring
-    read-before-write bookkeeping works on older Emacs versions. Updated
-    the output line budget test to assert the new concrete `lines_range'
-    hint instead of the removed generic wording.
-
-
-5 Version 1.21.0
-════════════════
-
-  • Added project-local before and after shell hook support around
-    mutating edit tools, including per-hook output visibility, failure
-    reporting, hook environment context, and independent sectioned
-    output budgets.
+  • Added literal string matching support to `ellama-tools-grep-tool'
+    and `ellama-tools-grep-in-file-tool' using `-F' (fixed-strings) and
+    `-e' flags, treating the search string literally rather than as a
+    regular expression.  Added helper function
+    `ellama-tools--grep-search-args' and corresponding unit tests.
+  • Fixed `srt' command quoting for shell execution. Added
+    `ellama-tools--shell-quote-command' helper and updated
   …  …
