@@ -1,10 +1,15 @@
 # Makefile for ellama project
 
-.PHONY: build test test-detailed test-integration test-srt-integration docker-build-srt-parity test-srt-integration-linux check-compile-warnings checkdocs manual format-elisp install-git-hooks refill-news refill-readme check-elisp check-readme check-news
+.PHONY: build test test-detailed test-integration test-srt-integration docker-build-srt-parity test-srt-integration-linux check-compile-warnings checkdocs manual format-elisp install-git-hooks refill-news refill-readme check-elisp check-readme check-news check-custom-variables check-commands
 
 SRT_PARITY_DOCKER_IMAGE ?= ellama-srt-parity:latest
 SRT_PARITY_DOCKERFILE ?= docker/srt-parity-linux.Dockerfile
 SRT_PARITY_DOCKER_RUN_FLAGS ?= --rm --privileged
+
+# Emacs uses TMPDIR while loading Org.  When a sandboxed caller inherits a
+# stale temporary directory, fall back to the system temp root for all recipes.
+override TMPDIR := $(or $(wildcard $(TMPDIR)),/tmp)
+export TMPDIR
 
 # This order is based on the packages dependency graph.
 ELLAMA_COMPILE_ORDER = \
@@ -24,6 +29,7 @@ build:
 		--eval "(package-initialize)" \
 		--eval "(require 'cl-lib)" \
 		--eval "(setq load-prefer-newer t)" \
+		--eval "(setq byte-compile-error-on-warn t)" \
 		--eval "(setq load-path (cl-remove-if (lambda (dir) (string-match-p \"/elpa/org-[^/]+/?$$\" dir)) (cons (expand-file-name \".\") load-path)))" \
 		-f batch-byte-compile ellama*.el
 
@@ -76,7 +82,7 @@ test-srt-integration-linux: docker-build-srt-parity
 		make test-srt-integration
 
 check-compile-warnings:
-	emacs --batch --eval "(package-initialize)" --eval "(setq load-prefer-newer t)" --eval "(setq native-comp-eln-load-path (list default-directory))" -L . -f batch-native-compile $(ELLAMA_COMPILE_ORDER)
+	emacs --batch --eval "(package-initialize)" --eval "(setq load-prefer-newer t)" --eval "(setq byte-compile-error-on-warn t)" --eval "(setq native-comp-eln-load-path (list default-directory))" -L . -f batch-native-compile $(ELLAMA_COMPILE_ORDER)
 
 checkdocs:
 	emacs -Q -batch \
@@ -113,6 +119,12 @@ refill-readme:
 
 check-elisp: format-elisp build test check-compile-warnings checkdocs
 
-check-readme: refill-readme manual
+check-readme: refill-readme manual check-custom-variables check-commands
 
 check-news: refill-news
+
+check-custom-variables:
+	./scripts/check-custom-variables.sh
+
+check-commands:
+	./scripts/check-commands.sh

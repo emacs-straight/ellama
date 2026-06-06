@@ -1,4 +1,62 @@
-1 Version 1.26.0
+1 Version 1.27.2
+════════════════
+
+  • Fixed `make' recipes when a sandboxed caller inherits a stale
+    `TMPDIR'.  Ellama now keeps valid temporary directories and falls
+    back to `/tmp' only when the inherited directory no longer exists,
+    which prevents Org from failing while loading during `srt make
+    check-elisp'.
+
+
+2 Version 1.27.1
+════════════════
+
+  • Added copyright notice to `extract-commands.el' script.
+
+
+3 Version 1.27.0
+════════════════
+
+  • Added `ellama-undo-on-error'. Users can now choose whether failed
+    LLM requests roll back partial buffer changes or leave the generated
+    text in place.
+  • Made plan-and-act and subagent loops more resilient after LLM
+    failures. The loops continue after the first error, compact the
+    session after repeated errors, resume after successful compaction,
+    and stop cleanly when compaction cannot recover the session.
+  • Made subagent tool errors part of the conversation instead of
+    aborting the provider tool-use path. Synchronous and asynchronous
+    tool failures are now returned as tool results so the worker can
+    inspect the error and keep going.
+  • Added preflight session compaction before oversized requests are
+    sent. This covers regular `ellama-stream' calls and plan-and-act
+    controller turns, and it resumes the deferred request in the target
+    session buffer after compaction.
+  • Changed edit tools to use asynchronous hook handling. Hooks no
+    longer block the Emacs UI, while agents still receive the tool
+    result only after the hooks have finished.
+  • Tightened project checks. Byte and native compiler warnings now fail
+      `make check-elisp', README custom-variable coverage is checked,
+      and documented public commands are checked against real
+      interactive commands.
+  • Added configurable trusted read-file handling for
+    DLP. Prompt-injection scans can be skipped for safe file-reading
+    outputs without disabling DLP for other tools.
+  • Improved agent buffer updates. Agent prompts, controller
+    continuations, plan reports, and visible tool/status output now
+    trigger the same auto-scrolling behavior as normal chat insertions,
+    and finished plan-and-act loops append the next user heading.
+  • Extended interactive model editing beyond Ollama and
+    OpenAI-compatible providers. The model transient can now read and
+    update providers with a generic `chat-model' slot, and URL editing
+    is available for providers with a `url' slot.
+  • Refreshed the documentation for the current agent, DLP, compaction,
+    provider, skill, blueprint, and tooling behavior. The
+    chat-with-image transient key was also moved from `i' to `I' to
+    avoid a key conflict.
+
+
+4 Version 1.26.0
 ════════════════
 
   • Auto-fix unexpected closing delimiters in file edits. When syntax
@@ -25,59 +83,9 @@
     consolidating the test execution into a single target.
 
 
-2 Version 1.25.0
+5 Version 1.25.0
 ════════════════
 
   • Add loop detection to `ellama-eval' harness that identifies
-    repetitive tool call patterns indicating agents are stuck in
-    evaluation loops. The harness returns recovery guidance on the first
-    repeated identical tool call sequence, and falls back to hard loop
-    detection for repeated loops after recovery.  Configurable
-    defcustoms control the behavior:
-    `ellama-eval-loop-detection-enabled' (default: t),
-    `ellama-eval-loop-detection-repeated-threshold' (default: 2), and
-    `ellama-eval-loop-detection-max-traces' (default: 50).
-
-  • Move loop recovery into task subagents by wrapping role tools with
-    session-local repeated-call detection. Repeated identical tool calls
-    return recovery guidance at the configured threshold and complete
-    the subtask if the same consecutive chain continues. Document the
-    new subagent loop-detection settings in README.org.
-
-  • Extend evaluation cancellation with request context tracking. Store
-    the active request context on the session for streaming,
-    continuation, and compaction requests so that eval timeout
-    cancellation can target the correct context directly. Cancel active
-    eval worker requests when a run finishes with a non-completed
-    status, and register asynchronous session compaction requests in the
-    active request context so user cancellation and eval timeout stop
-    the compact request itself.
-
-  • Harden evaluation async buffer handling by scheduling timers from a
-    stable internal buffer so callbacks do not inherit transient
-    subagent buffers. Guard interactive summary rendering against stale
-    target-window errors and fall back to display-buffer.
-
-  • Render evaluation progress and final summaries into the selected
-    window for interactive runs, keeping the existing display-buffer
-    behavior as a fallback for noninteractive or stale-window calls.
-
-  • Preserve triggering tool calls in public traces and final
-    loop-detection results when loop detection triggers, and record
-    recovery metadata in tool traces so recovered passing runs remain
-    visible. Avoid false loop detection on later repeated reads by
-    treating the repeated-call threshold as the recovery point for the
-    current consecutive chain.
-
-
-3 Version 1.24.1
-════════════════
-
-  • Added literal string matching support to `ellama-tools-grep-tool'
-    and `ellama-tools-grep-in-file-tool' using `-F' (fixed-strings) and
-    `-e' flags, treating the search string literally rather than as a
-    regular expression.  Added helper function
-    `ellama-tools--grep-search-args' and corresponding unit tests.
-  • Fixed `srt' command quoting for shell execution. Added
-    `ellama-tools--shell-quote-command' helper and updated
+    repetitive tool
   …  …
