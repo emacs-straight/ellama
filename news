@@ -1,4 +1,50 @@
-1 Version 1.27.2
+1 Version 1.28.0
+════════════════
+
+  • Audio input support: audio files can now be attached alongside
+    images in prompts, with provider capability validation. Includes
+    transient entries, key bindings, a recording lighter in the mode
+    line, and microphone recording commands. `ellama-read-file' can
+    queue audio files for the next model turn, exposing audio mode in
+    customization and tool metadata.
+  • Audio recording backends: on startup, auto-selects the available
+    recorder by platform — FFmpeg or SoX on macOS, arecord/FFmpeg/SoX on
+    GNU/Linux. Fallback failures include the recorder's output and a
+    macOS microphone-permission hint.
+  • Recording normalization: default FFmpeg recordings are processed
+    through a configurable dynamic audio normalization filter so quiet
+    speech reaches audio models at a usable level.
+  • Provider type selection: `ellama-transient' now supports selecting
+    LLM provider types (Ollama, Claude, Gemini, etc.) via
+    `ellama-transient-provider-types' and
+    `ellama-transient-set-provider-type', with improved error handling
+    during streamed responses.
+  • Self-check step in plan-and-act: the workflow now appends an
+    unstepped "Check yourself" entry to the checklist, allowing manual
+    review before the acting phase.
+  • Silent buffer revert after editing file: calls `revert-buffer' after
+    `save-buffer' to stop Emacs from asking whether to revert a file
+    that was just written.
+  • File buffer refresh after shell commands: file-visiting buffers
+    under the shell command working directory are refreshed silently
+    after command completion, without prompting.
+  • Non-interactive shell environment: `shell_command' sets `TERM=dumb'
+    and `NO_COLOR=true' for subprocesses, preserving pager
+    normalization.
+  • Improved truncated output hints: line-range reporting now shows
+    accurate output and source line counts, includes the configured line
+    budget in guidance, and keeps saved-output hints scoped to results
+    without known sources.
+  • Line range edge cases: when the requested end exceeds the file
+    length, `lines_range' returns available lines with a warning instead
+    of failing. Ranges that start past EOF still error.
+  • Documentation: README sections rewritten for clarity and brevity;
+    audio input commands and workflows documented in a dedicated
+    section; `ellama.info' regenerated from the updated Org source.
+  • Updated `llm' dependency from 0.30.2 to 0.31.1.
+
+
+2 Version 1.27.2
 ════════════════
 
   • Fixed `make' recipes when a sandboxed caller inherits a stale
@@ -8,13 +54,13 @@
     check-elisp'.
 
 
-2 Version 1.27.1
+3 Version 1.27.1
 ════════════════
 
   • Added copyright notice to `extract-commands.el' script.
 
 
-3 Version 1.27.0
+4 Version 1.27.0
 ════════════════
 
   • Added `ellama-undo-on-error'. Users can now choose whether failed
@@ -39,53 +85,4 @@
       `make check-elisp', README custom-variable coverage is checked,
       and documented public commands are checked against real
       interactive commands.
-  • Added configurable trusted read-file handling for
-    DLP. Prompt-injection scans can be skipped for safe file-reading
-    outputs without disabling DLP for other tools.
-  • Improved agent buffer updates. Agent prompts, controller
-    continuations, plan reports, and visible tool/status output now
-    trigger the same auto-scrolling behavior as normal chat insertions,
-    and finished plan-and-act loops append the next user heading.
-  • Extended interactive model editing beyond Ollama and
-    OpenAI-compatible providers. The model transient can now read and
-    update providers with a generic `chat-model' slot, and URL editing
-    is available for providers with a `url' slot.
-  • Refreshed the documentation for the current agent, DLP, compaction,
-    provider, skill, blueprint, and tooling behavior. The
-    chat-with-image transient key was also moved from `i' to `I' to
-    avoid a key conflict.
-
-
-4 Version 1.26.0
-════════════════
-
-  • Auto-fix unexpected closing delimiters in file edits. When syntax
-    validation fails due to unexpected closing delimiters (like extra
-    `)` or `]`), the system automatically removes them and accepts the
-    edit if the result is valid. This reduces friction for LLM-generated
-    edits that occasionally include spurious closers. Changes include
-    new functions `ellama-eval–remove-unexpected-closers-in-buffer` and
-    `ellama-tools–remove-unexpected-closers-in-buffer` to scan buffers
-    and remove closers without matching openers,
-    `ellama-eval–try-fix-unexpected-closers` and
-    `ellama-tools–try-fix-unexpected-closers` to attempt auto-fixing in
-    file context with safe buffer restoration, and integration of
-    auto-fixing into monitored-edit-file-tool and all balanced edit
-    tools.
-  • Add commit patch fallback for generate-commit-message. New functions
-    `ellama–in-commit-buffer` and `ellama–commit-patch` detect git
-    commit buffers and retrieve commit patches. Modified
-    `ellama-generate-commit-message` to use commit patch as a fallback
-    when no staged or unstaged diff is available, enabling proper commit
-    message generation in git-commit-mode reword or amend scenarios.
-  • Simplify test target in Makefile. Remove the inline test command
-    definition and make `test` an alias for `test-detailed`,
-    consolidating the test execution into a single target.
-
-
-5 Version 1.25.0
-════════════════
-
-  • Add loop detection to `ellama-eval' harness that identifies
-    repetitive tool
   …  …
