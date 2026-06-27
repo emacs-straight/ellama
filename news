@@ -1,4 +1,28 @@
-1 Version 1.28.0
+1 Version 1.29.0
+════════════════
+
+  • Added `ellama-setup-agentic-coding' to configure long-running
+    coding-agent defaults. This profile enables DLP enforcement,
+    fail-closed DLP behavior, session compaction, visible sub-agent
+    sessions, and longer agent loop limits. In non-SRT mode, ordinary
+    DLP findings ask first while normal confirmations stay active; in
+    SRT mode, ordinary input findings are allowed and ordinary output
+    findings are redacted, with irreversible findings still
+    blocked. Tests cover non-SRT, SRT, and secure modes.
+  • Removed obsolete problem solver commands
+    `ellama-solve-reasoning-problem' and
+    `ellama-solve-domain-specific-problem' from the codebase and the
+    main transient menu, along with the `ellama-chain' function they
+    relied upon.
+  • Updated the README onboarding section to refresh Installation
+    references around GNU ELPA, Ollama, and added an explicit
+    `qwen3.6:35b' agentic setup example.
+  • Documented the new `ellama-setup-agentic-coding' profile and split
+    Commands and Configuration sections into smaller groups for easier
+    navigation. Regenerated `ellama.info'.
+
+
+2 Version 1.28.0
 ════════════════
 
   • Audio input support: audio files can now be attached alongside
@@ -44,7 +68,7 @@
   • Updated `llm' dependency from 0.30.2 to 0.31.1.
 
 
-2 Version 1.27.2
+3 Version 1.27.2
 ════════════════
 
   • Fixed `make' recipes when a sandboxed caller inherits a stale
@@ -54,35 +78,16 @@
     check-elisp'.
 
 
-3 Version 1.27.1
+4 Version 1.27.1
 ════════════════
 
   • Added copyright notice to `extract-commands.el' script.
 
 
-4 Version 1.27.0
+5 Version 1.27.0
 ════════════════
 
   • Added `ellama-undo-on-error'. Users can now choose whether failed
     LLM requests roll back partial buffer changes or leave the generated
     text in place.
-  • Made plan-and-act and subagent loops more resilient after LLM
-    failures. The loops continue after the first error, compact the
-    session after repeated errors, resume after successful compaction,
-    and stop cleanly when compaction cannot recover the session.
-  • Made subagent tool errors part of the conversation instead of
-    aborting the provider tool-use path. Synchronous and asynchronous
-    tool failures are now returned as tool results so the worker can
-    inspect the error and keep going.
-  • Added preflight session compaction before oversized requests are
-    sent. This covers regular `ellama-stream' calls and plan-and-act
-    controller turns, and it resumes the deferred request in the target
-    session buffer after compaction.
-  • Changed edit tools to use asynchronous hook handling. Hooks no
-    longer block the Emacs UI, while agents still receive the tool
-    result only after the hooks have finished.
-  • Tightened project checks. Byte and native compiler warnings now fail
-      `make check-elisp', README custom-variable coverage is checked,
-      and documented public commands are checked against real
-      interactive commands.
   …  …
