@@ -1,4 +1,21 @@
-1 Version 1.29.0
+1 Version 1.30.0
+════════════════
+
+  • Split the subagent task tool into two separate contracts. The `task'
+    tool handles free-form delegation, while `task_from_template'
+    handles template-based delegation. Both now have proper required
+    schemas and validation checks instead of accepting anything
+    silently. The direct Lisp template interface still works as
+    before. Updated the docs and added regression tests.
+  • Added a plan-and-act action to the blueprint-mode transient
+    menu. Starting it kicks off the plan-and-act agent loop from the
+    current blueprint buffer and then closes the buffer. Included
+    regression tests to verify the buffer contents get forwarded to
+    `ellama-plan-and-act' and that the source buffer is killed once the
+    loop starts.
+
+
+2 Version 1.29.0
 ════════════════
 
   • Added `ellama-setup-agentic-coding' to configure long-running
@@ -22,7 +39,7 @@
     navigation. Regenerated `ellama.info'.
 
 
-2 Version 1.28.0
+3 Version 1.28.0
 ════════════════
 
   • Audio input support: audio files can now be attached alongside
@@ -63,31 +80,5 @@
     length, `lines_range' returns available lines with a warning instead
     of failing. Ranges that start past EOF still error.
   • Documentation: README sections rewritten for clarity and brevity;
-    audio input commands and workflows documented in a dedicated
-    section; `ellama.info' regenerated from the updated Org source.
-  • Updated `llm' dependency from 0.30.2 to 0.31.1.
-
-
-3 Version 1.27.2
-════════════════
-
-  • Fixed `make' recipes when a sandboxed caller inherits a stale
-    `TMPDIR'.  Ellama now keeps valid temporary directories and falls
-    back to `/tmp' only when the inherited directory no longer exists,
-    which prevents Org from failing while loading during `srt make
-    check-elisp'.
-
-
-4 Version 1.27.1
-════════════════
-
-  • Added copyright notice to `extract-commands.el' script.
-
-
-5 Version 1.27.0
-════════════════
-
-  • Added `ellama-undo-on-error'. Users can now choose whether failed
-    LLM requests roll back partial buffer changes or leave the generated
-    text in place.
+    audio input
   …  …
