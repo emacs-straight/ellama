@@ -1,4 +1,23 @@
-1 Version 1.32.1
+1 Version 1.32.2
+════════════════
+
+  • Add Emacs 31.1 to the MELPA and ERT CI matrices so new compiler
+    warnings are caught in GitHub Actions.
+  • Fix Emacs 31 compilation warnings by replacing deprecated
+    conditional binding macros, providing a compatibility fallback for
+    `replace-region-contents' on older Emacs versions, loading Info for
+    the transient command, and capitalizing two warning messages to
+    satisfy checkdoc.
+  • Run native compilation in the Emacs 31.1 CI job and reformat Elisp
+    code so the pre-push check passes.
+  • Select buffer replacement by Emacs major version: older variants of
+    `replace-region-contents' do not accept a buffer source argument.
+
+  Retain Emacs 31.1 byte-compilation coverage without a native step,
+  since the action build does not support it yet.
+
+
+2 Version 1.32.1
 ════════════════
 
   • Preserve file buffer positions during tool updates. File contents
@@ -15,7 +34,7 @@
     paths.
 
 
-2 Version 1.32.0
+3 Version 1.32.0
 ════════════════
 
   • Preserve Markdown tables during streaming conversion. Paragraph
@@ -27,7 +46,7 @@
     updates.
 
 
-3 Version 1.31.0
+4 Version 1.31.0
 ════════════════
 
   • Show irreversible action confirmation details. Named tool arguments
@@ -37,7 +56,7 @@
     tests cover prompt contents as well as the view interaction.
 
 
-4 Version 1.30.0
+5 Version 1.30.0
 ════════════════
 
   • Split the subagent task tool into two separate contracts. The `task'
@@ -54,7 +73,7 @@
     loop starts.
 
 
-5 Version 1.29.0
+6 Version 1.29.0
 ════════════════
 
   • Added `ellama-setup-agentic-coding' to configure long-running
@@ -75,23 +94,4 @@
     `qwen3.6:35b' agentic setup example.
   • Documented the new `ellama-setup-agentic-coding' profile and split
     Commands and Configuration sections into smaller groups for easier
-    navigation. Regenerated `ellama.info'.
-
-
-6 Version 1.28.0
-════════════════
-
-  • Audio input support: audio files can now be attached alongside
-    images in prompts, with provider capability validation. Includes
-    transient entries, key bindings, a recording lighter in the mode
-    line, and microphone recording commands. `ellama-read-file' can
-    queue audio files for the next model turn, exposing audio mode in
-    customization and tool metadata.
-  • Audio recording backends: on startup, auto-selects the available
-    recorder by platform — FFmpeg or SoX on macOS, arecord/FFmpeg/SoX on
-    GNU/Linux. Fallback failures include the recorder's output and a
-    macOS microphone-permission hint.
-  • Recording normalization: default FFmpeg recordings are processed
-    through a configurable dynamic audio normalization filter so quiet
-    speech reaches audio
   …  …
