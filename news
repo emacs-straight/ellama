@@ -1,4 +1,11 @@
-1 Version 1.32.2
+1 Version 1.32.3
+════════════════
+
+  • Use `start-file-process' for tool subprocesses so commands can run
+    in remote TRAMP directories.
+
+
+2 Version 1.32.2
 ════════════════
 
   • Add Emacs 31.1 to the MELPA and ERT CI matrices so new compiler
@@ -17,7 +24,7 @@
   since the action build does not support it yet.
 
 
-2 Version 1.32.1
+3 Version 1.32.1
 ════════════════
 
   • Preserve file buffer positions during tool updates. File contents
@@ -34,7 +41,7 @@
     paths.
 
 
-3 Version 1.32.0
+4 Version 1.32.0
 ════════════════
 
   • Preserve Markdown tables during streaming conversion. Paragraph
@@ -46,7 +53,7 @@
     updates.
 
 
-4 Version 1.31.0
+5 Version 1.31.0
 ════════════════
 
   • Show irreversible action confirmation details. Named tool arguments
@@ -56,7 +63,7 @@
     tests cover prompt contents as well as the view interaction.
 
 
-5 Version 1.30.0
+6 Version 1.30.0
 ════════════════
 
   • Split the subagent task tool into two separate contracts. The `task'
@@ -73,7 +80,7 @@
     loop starts.
 
 
-6 Version 1.29.0
+7 Version 1.29.0
 ════════════════
 
   • Added `ellama-setup-agentic-coding' to configure long-running
@@ -93,5 +100,5 @@
     references around GNU ELPA, Ollama, and added an explicit
     `qwen3.6:35b' agentic setup example.
   • Documented the new `ellama-setup-agentic-coding' profile and split
-    Commands and Configuration sections into smaller groups for easier
+    Commands
   …  …
