@@ -1,11 +1,23 @@
-1 Version 1.33.1
+1 Version 1.33.2
+════════════════
+
+  • Fix file reads when a path uses ordinary spaces in place of
+    nonbreaking spaces, as can happen with macOS screenshot names. If
+    the exact path is missing, `read_file', `grep_in_file',
+    `lines_range', and `count_lines' can use a unique match in the same
+    directory.
+  • Read `srt' settings as UTF-8 so sandbox rules can contain Unicode
+    paths.
+
+
+2 Version 1.33.1
 ════════════════
 
   • Fix `json-end-of-file' errors when displaying empty tool results or
     incomplete JSON text, allowing conversations to continue.
 
 
-2 Version 1.33.0
+3 Version 1.33.0
 ════════════════
 
   • Add `session_file' tool to expose the current session transcript as
@@ -44,14 +56,14 @@
     let CI regenerate the committed manual on each build.
 
 
-3 Version 1.32.3
+4 Version 1.32.3
 ════════════════
 
   • Use `start-file-process' for tool subprocesses so commands can run
     in remote TRAMP directories.
 
 
-4 Version 1.32.2
+5 Version 1.32.2
 ════════════════
 
   • Add Emacs 31.1 to the MELPA and ERT CI matrices so new compiler
@@ -70,7 +82,7 @@
   since the action build does not support it yet.
 
 
-5 Version 1.32.1
+6 Version 1.32.1
 ════════════════
 
   • Preserve file buffer positions during tool updates. File contents
@@ -87,7 +99,7 @@
     paths.
 
 
-6 Version 1.32.0
+7 Version 1.32.0
 ════════════════
 
   • Preserve Markdown tables during streaming conversion. Paragraph
@@ -97,14 +109,4 @@
     normalized and tables are aligned for both builtin and Pandoc
     converters, with better handling of wider cells during streaming
     updates.
-
-
-7 Version 1.31.0
-════════════════
-
-  • Show irreversible action confirmation details. Named tool arguments
-    are now included in security confirmation prompts, and a full-detail
-    view flow has been added for DLP and irreversible actions. The flow
-    preserves context even when audit logging fails, and regression
-    tests cover prompt contents as well
   …  …
